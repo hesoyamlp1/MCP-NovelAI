@@ -20,6 +20,7 @@ from typing import Annotated
 import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP, Image
+from mcp.types import TextContent, ImageContent
 from PIL import Image as PILImage
 from pydantic import SecretStr
 
@@ -454,7 +455,10 @@ async def generate_image(
     saved_path = save_image(image_data, prefix="gen")
     print(f"💾 图片已保存: {saved_path}", file=sys.stderr)
 
-    return Image(data=image_data, format="png")
+    return [
+        TextContent(type="text", text=f"图片已保存到: {saved_path}"),
+        ImageContent(type="image", data=base64.b64encode(image_data).decode("utf-8"), mimeType="image/png"),
+    ]
 
 
 @mcp.tool()
@@ -605,7 +609,10 @@ async def img2img(
     saved_path = save_image(image_data, prefix="i2i")
     print(f"💾 图片已保存: {saved_path}", file=sys.stderr)
 
-    return Image(data=image_data, format="png")
+    return [
+        TextContent(type="text", text=f"图片已保存到: {saved_path}"),
+        ImageContent(type="image", data=base64.b64encode(image_data).decode("utf-8"), mimeType="image/png"),
+    ]
 
 
 @mcp.tool()
