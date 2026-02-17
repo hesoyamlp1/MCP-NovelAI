@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "novelai-mcp"
+version = "0.1.0"
+description = "NovelAI MCP Server - 为 AI 助手提供 NovelAI 图像生成能力"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "hesoyamlp1" },
+]
+keywords = ["mcp", "novelai", "ai", "image-generation", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "novelai-python>=0.5.0",
+    "python-dotenv>=1.0.0",
+    "httpx",
+    "Pillow",
+]
+
+[project.scripts]
+novelai-mcp = "novelai_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/hesoyamlp1/MCP-NovelAI"
+Repository = "https://github.com/hesoyamlp1/MCP-NovelAI"
+Issues = "https://github.com/hesoyamlp1/MCP-NovelAI/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/novelai_mcp"]
