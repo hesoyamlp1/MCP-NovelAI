@@ -19,7 +19,7 @@
 
 - infill：两个 V5 模型均实际返回 HTTP 400，提示模型不支持 infill。响应后还附带图片内容，但这不证明局部重绘成立。工具已在提交前拒绝此动作；保留最初原始错误响应作为证据。
 - Vibe Transfer、Precise Reference：当前官方 V5 页面声明尚未开放，V5 工具拒绝相关字段。不用 V4.5 实现冒充 V5。
-- Director Tools 属于独立图像工具，现已提供 director_image。线稿与去背景已对两个 V5 模型来源图完成真实 MCP 调用；其余操作尚未逐项验收，不计入 V5 原生能力。
+- Director Tools 属于独立图像工具，现已提供 director_image。线稿与去背景已对两个 V5 模型来源图完成真实 MCP 调用；其余操作已完成真实返回测试；效果限制见下，不计入 V5 原生能力。
 
 ## 实际画面结论
 
@@ -56,4 +56,8 @@ Mac 测试目录：`/Users/linsuki/passion/MCP-NovelAI/.runtime/v5-e2e/`。
 - director_bg-removal：每张来源图返回三张 832×1216 RGBA PNG，全部 alpha 范围 0–255；已目视检查两个来源的第 0 张，背景去除且人物保留。接口 ZIP 只命名 image_0/1/2，未提供语义标签，工具不猜测哪张对应 Masked/Generated/Blend。全部文件保留。
 - 证据：https://show.toddout.work/a/mu086wag7051 。
 - 原始调用、响应与结果在 Mac .runtime/v5-e2e/*-director_*.receipt.json 及关联路径。
-- 工具支持 colorize、sketch、emotion、declutter、declutter-keep-bubbles 的参数转发，尚未逐项验证真实效果。
+- sketch：两种来源均生成明显的铅笔草图，人物和书架结构保留，已目视确认。
+- colorize：以两张线稿为输入得到彩色图，已目视确认；Curated 来源的书仍被画为红色而非提示中的蓝色，部分书架色彩较强。不是精确按标签上色的保证。
+- emotion：以 happy;;、defry=1 请求，均返回图片；侧脸/全身输入下表情改变轻微，不能据此声称表情修改足够明显。
+- declutter / declutter-keep-bubbles：两种来源均收到正常图片；原图无明显文字杂物，当前只能确认接口执行，清理及保留气泡的语义效果尚缺有针对性的验收。
+- 补充图集：https://show.toddout.work/a/mu08zhsw5eb2 。
