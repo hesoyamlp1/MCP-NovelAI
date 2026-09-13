@@ -1,0 +1,188 @@
+"""NovelAI V5 tools built against the public image API, independent of legacy SDK enums."""
+import base64
+import hashlib
+import io
+import json
+from pathlib import Path
+import secrets
+import uuid
+import zipfile
+
+import httpx
+from PIL import Image
+from mcp.types import ImageContent, TextContent
+
+MODELS = {'v5-full': 'nai-diffusion-5-full', 'v5-curated': 'nai-diffusion-5-curated'}
+GUIDANCE = '''NovelAI 美术工具。V5 优先使用 generate_v5，旧 generate_image/img2img 保留给旧模型。
+先用 v5_capabilities 核对功能；用 suggest_tags_v5 查询模型对应的标签。标签计数不是训练数据或生成质量的保证。V5 同时支持标签和自然语言，场景构图可以用明确的自然语言描述。
+人物固定外观放在独立 character prompt，场景和风格放在 base prompt；多角色可提供各自坐标与负面提示词。先保存满意的参考图和生成参数，再选择实际支持的图像输入方式保持连续性。
+图生图需要 image_path、strength、noise；低 strength 倾向保留原图，高 strength 改动更大。明确描述要保留与要变化的内容，不能把图生图等同于精确身份复制。
+官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。infill 与独立 upscale 以实际接口结果为准，能力表会标注验证状态。
+prepare_image_v5 可准备画布/尺寸及遮罩。图像处理会保存新文件，原文件保留。API 限流或失败不自动重试。
+使用 seed、采样和完整参数记录复现画面；prompt 的作用与 img2img strength 相互影响。PNG 支持透明度，透明背景还需要在正面描述中明确要求。
+工具可预览最终 payload；预览不是实际生成。每次成功生成返回文件、尺寸、哈希与请求记录；用户可见结果需查看图片。'''
+
+
+def resolve_model(name):
+    if name in MODELS:
+        return MODELS[name]
+    if name in MODELS.values():
+        return name
+    raise ValueError('V5 工具只接受 v5-full / v5-curated')
+
+
+def read_image(path):
+    data = Path(path).read_bytes()
+    with Image.open(io.BytesIO(data)) as im:
+        im.verify()
+    return base64.b64encode(data).decode()
+
+
+def build_payload(prompt, model='v5-full', action='generate', width=832, height=1216,
+                  negative_prompt='', characters=None, image_path=None, mask_path=None,
+                  strength=.5, noise=0., seed=None, parameters=None):
+    model_id = resolve_model(model)
+    if action not in ('generate', 'img2img', 'infill'):
+        raise ValueError('action 必须是 generate / img2img / infill')
+    if width < 64 or height < 64 or width % 64 or height % 64:
+        raise ValueError('宽高必须为至少 64 的 64 倍数')
+    if not 0 <= strength <= 1 or not 0 <= noise <= 1:
+        raise ValueError('strength/noise 应在 0–1 之间')
+    chars = characters or []
+    if len(chars) > 22:
+        raise ValueError('V5 最多 22 个独立角色描述')
+    positive, negative = [], []
+    for char in chars:
+        x, y = char.get('x', .5), char.get('y', .5)
+        if not 0 <= x <= 1 or not 0 <= y <= 1:
+            raise ValueError('角色坐标应在 0–1 之间')
+        centers = [{'x': x, 'y': y}]
+        positive.append({'char_caption': char['prompt'], 'centers': centers})
+        negative.append({'char_caption': char.get('negative_prompt', ''), 'centers': centers})
+    actual_seed = seed if seed is not None else secrets.randbelow(2**32)
+    params = {'params_version': 3, 'width': width, 'height': height, 'scale': 5., 'sampler': 'k_euler_ancestral', 'steps': 28, 'n_samples': 1, 'seed': actual_seed,
+              'noise_schedule': 'karras', 'qualityToggle': False, 'ucPreset': 3, 'negative_prompt': negative_prompt,
+              'v4_prompt': {'caption': {'base_caption': prompt, 'char_captions': positive}, 'use_coords': bool(chars), 'use_order': True},
+              'v4_negative_prompt': {'caption': {'base_caption': negative_prompt, 'char_captions': negative}, 'use_coords': bool(chars), 'legacy_uc': False},
+              'image_format': 'png', 'deliberate_euler_ancestral_bug': False, 'prefer_brownian': True}
+    if action in ('img2img', 'infill'):
+        if not image_path:
+            raise ValueError('图像操作需要 image_path')
+        params.update(image=read_image(image_path), strength=strength, noise=noise, extra_noise_seed=actual_seed)
+    if action == 'infill':
+        if not mask_path:
+            raise ValueError('infill 需要 mask_path')
+        params['mask'] = read_image(mask_path)
+        params['img2img'] = {'strength': strength, 'noise': noise, 'extra_noise_seed': actual_seed}
+    params.update(parameters or {})
+    if any(k.startswith('director_reference_') or k.startswith('reference_') for k in params):
+        raise ValueError('官方当前 V5 未开放 Vibe Transfer/Precise Reference；请使用实际支持的 img2img 输入')
+    if params.get('image_format') not in ('png', 'webp'):
+        raise ValueError('image_format 必须是 png 或 webp')
+    return {'input': prompt, 'model': model_id, 'action': action, 'parameters': params}
+
+
+class Client:
+    def __init__(self, key, directory):
+        self.key = key
+        self.directory = Path(directory)
+
+    async def get(self, path, params=None):
+        async with httpx.AsyncClient(timeout=30, headers={'Authorization': 'Bearer ' + self.key, 'User-Agent': 'NovelAI-MCP/0.2.0'}) as client:
+            response = await client.get('https://image.novelai.net' + path, params=params)
+        response.raise_for_status()
+        return response.json()
+
+    async def generate(self, payload, endpoint='/ai/generate-image'):
+        self.directory.mkdir(parents=True, exist_ok=True)
+        operation = uuid.uuid4().hex
+        record_path = self.directory / (operation + '.request.json')
+        record_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+        async with httpx.AsyncClient(timeout=180, headers={'Authorization': 'Bearer ' + self.key, 'User-Agent': 'NovelAI-MCP/0.2.0', 'Accept': 'application/json'}) as client:
+            response = await client.post('https://image.novelai.net' + endpoint, json=payload)
+        receipt = {'operation_id': operation, 'status': response.status_code, 'correlation_id': response.headers.get('x-correlation-id'), 'request_path': str(record_path), 'files': []}
+        if not response.is_success:
+            receipt['error'] = response.text
+            (self.directory / (operation + '.result.json')).write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
+            raise RuntimeError(json.dumps(receipt, ensure_ascii=False))
+        if 'json' in response.headers.get('content-type', ''):
+            images = [(str(i.get('index', n)), base64.b64decode(i['image'])) for n, i in enumerate(response.json()['images'])]
+        else:
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                images = [(str(n), archive.read(name)) for n, name in enumerate(archive.namelist()) if name.lower().endswith(('.png', '.webp'))]
+        for index, data in images:
+            with Image.open(io.BytesIO(data)) as im:
+                fmt, size, mode = im.format.lower(), im.size, im.mode
+            path = self.directory / f'{operation}-{index}.{fmt}'
+            path.write_bytes(data)
+            receipt['files'].append({'path': str(path), 'width': size[0], 'height': size[1], 'mode': mode, 'sha256': hashlib.sha256(data).hexdigest()})
+        (self.directory / (operation + '.result.json')).write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
+        return receipt
+
+
+def register(mcp, key, directory):
+    def client():
+        return Client(key(), directory())
+
+    @mcp.tool()
+    async def v5_capabilities() -> dict:
+        """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
+        return {'models': MODELS, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
+                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'requires_model_specific_verification': ['infill', 'upscale', 'streaming'],
+                'prompt_limits_approx_tokens': {'v5-full': {'base': 1471, 'text': 750}, 'v5-curated': {'base': 703, 'text': 374}},
+                'references': ['https://novelai.net/v5', 'https://docs.novelai.net/en/image/models/', 'https://image.novelai.net/docs/doc.json'], 'guide': GUIDANCE}
+
+    @mcp.tool()
+    async def suggest_tags_v5(query: str, model: str = 'v5-full', language: str = 'en') -> dict:
+        """使用 NovelAI 自身的模型标签建议，保留原始 count/confidence，不把它当成生成质量评分。"""
+        return await client().get('/ai/generate-image/suggest-tags', {'model': resolve_model(model), 'prompt': query, 'lang': language})
+
+    @mcp.tool()
+    async def account_v5() -> dict:
+        """查询图像服务的真实订阅、usage 和 priority 返回，不自行推算未知费用或额度。"""
+        c = client()
+        return {'subscription': await c.get('/user/subscription'), 'priority': await c.get('/user/priority')}
+
+    @mcp.tool()
+    async def generate_v5(prompt: str, model: str = 'v5-full', action: str = 'generate', width: int = 832, height: int = 1216,
+                          negative_prompt: str = '', characters: list[dict] | None = None, image_path: str | None = None, mask_path: str | None = None,
+                          strength: float = .5, noise: float = 0., seed: int | None = None, parameters: dict | None = None, preview_only: bool = False) -> list:
+        """V5 文生图/图生图/局部重绘请求。characters 每项含 prompt、negative_prompt、x、y；parameters 对应官方 RequestParameters，可设置采样/步数/引导/格式/透明背景等完整参数。infill 需按能力记录验证。不会自动重试失败请求。"""
+        payload = build_payload(prompt, model, action, width, height, negative_prompt, characters, image_path, mask_path, strength, noise, seed, parameters)
+        if preview_only:
+            return [TextContent(type='text', text=json.dumps({'preview_only': True, 'payload': payload}, ensure_ascii=False))]
+        receipt = await client().generate(payload)
+        return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))] + [ImageContent(type='image', data=base64.b64encode(Path(f['path']).read_bytes()).decode(), mimeType='image/' + Path(f['path']).suffix[1:]) for f in receipt['files']]
+
+    @mcp.tool()
+    async def upscale_v5(image_path: str, model: str = 'v5-full', declared_blur_sigma: float = 0.) -> list:
+        """官方独立放大接口；支持情况需按 V5 各模型真实返回确认，不假称是生成模型的能力。"""
+        receipt = await client().generate({'image': read_image(image_path), 'model': resolve_model(model), 'declared_blur_sigma': declared_blur_sigma}, '/ai/upscale')
+        return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))]
+
+    @mcp.tool()
+    async def prepare_image_v5(image_path: str, width: int, height: int, mode: str = 'contain', mask_box: list[int] | None = None) -> dict:
+        """准备图像输入，保存新 PNG，保留原文件。contain 等比留边；cover 等比裁切；stretch 拉伸。mask_box=[左,上,右,下] 可另存白色选区/黑色背景遮罩，需与实际 API mask 语义匹配。"""
+        from PIL import ImageOps, ImageDraw
+        if width < 64 or height < 64 or width % 64 or height % 64 or width * height > 16_777_216:
+            raise ValueError('画布宽高需为 64 倍数，最大 16MP')
+        with Image.open(image_path) as im:
+            im = im.convert('RGBA')
+            if mode == 'contain':
+                out = Image.new('RGBA', (width, height), (255, 255, 255, 255)); fitted = ImageOps.contain(im, (width, height)); out.paste(fitted, ((width-fitted.width)//2, (height-fitted.height)//2))
+            elif mode == 'cover':
+                out = ImageOps.fit(im, (width, height))
+            elif mode == 'stretch':
+                out = im.resize((width, height), Image.Resampling.LANCZOS)
+            else:
+                raise ValueError('mode 必须是 contain / cover / stretch')
+        folder = Path(directory()); folder.mkdir(parents=True, exist_ok=True)
+        stem = uuid.uuid4().hex
+        target = folder / (stem + '-prepared.png'); out.save(target)
+        result = {'path': str(target), 'width': width, 'height': height, 'source': image_path, 'mode': mode}
+        if mask_box is not None:
+            if len(mask_box) != 4 or not 0 <= mask_box[0] < mask_box[2] <= width or not 0 <= mask_box[1] < mask_box[3] <= height:
+                raise ValueError('mask_box 超出画布')
+            mask = Image.new('L', (width, height), 0); ImageDraw.Draw(mask).rectangle(mask_box, fill=255)
+            mask_path = folder / (stem + '-mask.png'); mask.save(mask_path); result['mask_path'] = str(mask_path)
+        return result

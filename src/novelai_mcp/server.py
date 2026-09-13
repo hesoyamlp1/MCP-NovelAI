@@ -23,6 +23,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import TextContent, ImageContent
 from PIL import Image as PILImage
 from pydantic import SecretStr
+from .v5 import register as register_v5, GUIDANCE as V5_GUIDANCE
 
 from novelai_python import GenerateImageInfer, ApiCredential, ImageGenerateResp
 from novelai_python.sdk.ai.generate_image import Character, Model, Sampler, UCPreset
@@ -46,6 +47,8 @@ mcp = FastMCP(
     "NovelAI",
     instructions="",  # 在 main() 中动态设置
 )
+
+register_v5(mcp, lambda: API_KEY, lambda: SAVE_DIR)
 
 # ---------------------------------------------------------------------------
 # 辅助函数
@@ -623,20 +626,20 @@ async def suggest_tags(
     """
     搜索 Danbooru 标签，用于构建 NovelAI 图片生成的 prompt。
 
-    NovelAI 使用 Danbooru 标签体系，用精确标签效果远好于自然语言描述。
-    在构建 prompt 前，推荐对每个概念都调用此工具查询精确标签。
+    这是旧版通用 Danbooru 标签查询；V5 建议优先使用 suggest_tags_v5，并结合自然语言描述。
+    用于查找标签名称，不应把计数当作模型训练频次或生成质量保证。
 
     使用建议：
     - 将用户描述拆解为多个独立概念，逐个查询
     - 例如「蓝发女孩M字开腿」→ 分别查 'blue_hair'、'girl'、'm_leg'
-    - post_count 越高，表示 NovelAI 对该标签越熟悉，生成效果越好
-    - 优先选择 post_count > 1000 的标签
+    - post_count 是 Danbooru 使用次数，不表示 NovelAI 的训练频次或生成效果
+    - 按语义和实际生成效果选择标签
 
     返回字段：
     - tag: 标签名（直接用于 NovelAI prompt）
     - label: 人类可读名称
     - category: 标签分类（general=通用, character=角色, copyright=作品, artist=画师, meta=元数据）
-    - post_count: 使用次数（越高 AI 越熟悉）
+    - post_count: Danbooru 使用次数
     """
     import httpx
 
@@ -684,7 +687,7 @@ async def check_subscription() -> dict:
 
     async with httpx.AsyncClient() as client:
         sub_resp = await client.get(
-            "https://api.novelai.net/user/subscription",
+            "https://image.novelai.net/user/subscription",
             headers=headers,
         )
         sub_resp.raise_for_status()
@@ -692,7 +695,7 @@ async def check_subscription() -> dict:
 
         try:
             priority_resp = await client.get(
-                "https://api.novelai.net/user/priority",
+                "https://image.novelai.net/user/priority",
                 headers=headers,
             )
             priority_resp.raise_for_status()
@@ -768,46 +771,7 @@ def main():
     credential = ApiCredential(api_token=SecretStr(API_KEY))
 
     # 动态设置 MCP instructions，包含保存路径信息
-    mcp._mcp_server.instructions = f"""NovelAI 图像生成 MCP 服务器。
-提供以下工具：
-- generate_image: 文生图（支持多角色定位 + Vibe Transfer + Precise Reference）
-- img2img: 图生图（基于已有图片生成新图 + Vibe Transfer + Precise Reference）
-- suggest_tags: Danbooru 标签搜索（构建 prompt 前推荐使用）
-- check_subscription: 查询订阅状态和 Anlas 余额
-
-📁 图片保存目录: {SAVE_DIR}
-所有生成的图片都会自动保存到上述目录。
-
-推荐工作流：
-1. 将用户描述拆解为多个概念
-2. 对每个概念调用 suggest_tags 获取精确 Danbooru 标签
-3. 用获得的标签组装 prompt
-4. 调用 generate_image 生图
-
-===== 角色一致性：两种方案 =====
-
-【方案 A: Vibe Transfer】免费（Opus），基于风格迁移，适合大致保持角色外观
-- 参数: reference_image_paths + reference_strength
-- 特点: 偏风格迁移，角色面部/细节可能有偏差
-- reference_strength 推荐 0.4-0.6（太高会锁定姿势和构图）
-
-【方案 B: Precise Reference】消耗 Anlas，基于专用模型，精确复制角色身份/画风
-- 参数: precise_reference_image_path + precise_reference_mode + precise_reference_fidelity
-- 三种模式:
-  - "character": 仅复制角色身份（换装/换背景时用）
-  - "style": 仅复制画风/艺术风格
-  - "character&style": 同时复制角色和画风（推荐默认选择）
-- fidelity 推荐 0.8-1.0（1.0 最严格匹配）
-- 参考图建议: 全身立绘、中性姿势、简单背景效果最好
-
-【混合使用】两种方案可同时启用，Vibe Transfer 负责整体风格氛围，Precise Reference 负责角色精度。
-
-===== 角色一致性推荐流程 =====
-1. 先用 generate_image 生成一张满意的角色立绘（全身、中性姿势、简单背景）
-2. 再次调用 generate_image 时传入 precise_reference_image_path 指向该立绘
-3. prompt 中描述新姿势/场景，角色外观由 Precise Reference 自动保持
-4. 如需进一步微调风格，可同时传入 reference_image_paths 使用 Vibe Transfer
-"""
+    mcp._mcp_server.instructions = V5_GUIDANCE + f"\n素材保存目录：{SAVE_DIR}。旧版工具的模型范围以各自参数为准。"
 
     print(f"🚀 NovelAI MCP Server 启动中... (传输: {args.transport})", file=sys.stderr)
     print(f"📁 图片保存目录: {SAVE_DIR}", file=sys.stderr)
@@ -815,9 +779,11 @@ def main():
     if args.transport == "stdio":
         mcp.run(transport="stdio")
     elif args.transport == "streamable-http":
-        mcp.run(transport="streamable-http", port=args.port)
+        mcp.settings.port = args.port
+        mcp.run(transport="streamable-http")
     elif args.transport == "sse":
-        mcp.run(transport="sse", port=args.port)
+        mcp.settings.port = args.port
+        mcp.run(transport="sse")
 
 
 if __name__ == "__main__":
