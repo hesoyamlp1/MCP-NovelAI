@@ -58,6 +58,12 @@ Mac 测试目录：`/Users/linsuki/passion/MCP-NovelAI/.runtime/v5-e2e/`。
 - 原始调用、响应与结果在 Mac .runtime/v5-e2e/*-director_*.receipt.json 及关联路径。
 - sketch：两种来源均生成明显的铅笔草图，人物和书架结构保留，已目视确认。
 - colorize：以两张线稿为输入得到彩色图，已目视确认；Curated 来源的书仍被画为红色而非提示中的蓝色，部分书架色彩较强。不是精确按标签上色的保证。
-- emotion：以 happy;;、defry=1 请求，均返回图片；侧脸/全身输入下表情改变轻微，不能据此声称表情修改足够明显。
-- declutter / declutter-keep-bubbles：两种来源均收到正常图片；原图无明显文字杂物，当前只能确认接口执行，清理及保留气泡的语义效果尚缺有针对性的验收。
+- emotion：早期侧脸/全身输入变化轻微；定向使用正面中性头像、happy;;open mouth, smiling, laughing、defry=0 后，两种 V5 来源都产生明显笑脸。气泡中文字也被改动，说明操作不局限于面部。
+- declutter：定向图中浮动文字与气泡均去除；Full 来源还改动了背景和衣服，应保留原图审看。declutter-keep-bubbles：两个来源都去除文字并保留空气泡轮廓。原始无文字输入的早期测试只证明接口返回，本次定向测试才提供效果证据。
 - 补充图集：https://show.toddout.work/a/mu08zhsw5eb2 。
+
+## 定向语义验收补齐
+
+- 使用各 V5 模型生成的正面中性人物、浮动文字与对白气泡作为输入。emotion_closeup、declutter_text、declutter-keep-bubbles_text 共六次真实 MCP 调用完成，原图和结果均已目视检查。
+- 图集：https://show.toddout.work/a/mu0a4pf1f4c9 。
+- 所有 Director 操作现在都有真实返回及针对其用途的可见效果记录；依然是独立工具，不宣称 V5 原生精确编辑或只改目标区域。
