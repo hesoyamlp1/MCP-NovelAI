@@ -223,7 +223,7 @@ def register(mcp, key, directory):
     @mcp.tool()
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
-        return {'models': MODELS, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
+        return {'models': MODELS, 'independent_director_tools': {'tool': 'director_image', 'verified_on_v5_source_images': ['lineart', 'bg-removal'], 'other_operations_not_yet_verified': ['sketch', 'colorize', 'emotion', 'declutter', 'declutter-keep-bubbles']}, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
                 'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale', 'sse_streaming', 'multi_character', 'transparent_background', 'png', 'webp', 'text_rendering'], 'verified_unsupported': ['infill'],
                 'prompt_limits_approx_tokens': {'v5-full': {'base': 1471, 'text': 750}, 'v5-curated': {'base': 703, 'text': 374}},
                 'references': ['https://novelai.net/v5', 'https://docs.novelai.net/en/image/models/', 'https://image.novelai.net/docs/doc.json'], 'guide': GUIDANCE}
