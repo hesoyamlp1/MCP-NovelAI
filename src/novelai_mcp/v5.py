@@ -210,6 +210,17 @@ def register(mcp, key, directory):
         return {'path': str(target), 'width': size[0], 'height': size[1], 'sha256': hashlib.sha256(data).hexdigest()}
 
     @mcp.tool()
+    async def director_image(image_path: str, operation: str, prompt: str = '', defry: int = 0) -> list:
+        """独立 Director Tools，并非 V5 原生模型功能。operation: bg-removal、lineart、sketch、colorize、emotion、declutter、declutter-keep-bubbles。prompt/defry 原样传给官方接口，按各操作含义使用。保留全部返回图片与原始请求结果，不自动重试。"""
+        if operation not in ('bg-removal', 'lineart', 'sketch', 'colorize', 'emotion', 'declutter', 'declutter-keep-bubbles'):
+            raise ValueError('未知 Director Tools 操作')
+        with Image.open(image_path) as im:
+            width, height = im.size
+        receipt = await client().generate({'image': read_image(image_path), 'width': width, 'height': height,
+                                           'req_type': operation, 'prompt': prompt, 'defry': defry}, '/ai/augment-image')
+        return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))] + [ImageContent(type='image', data=read_image(f['path']), mimeType='image/' + Path(f['path']).suffix[1:]) for f in receipt['files']]
+
+    @mcp.tool()
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
         return {'models': MODELS, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
