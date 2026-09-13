@@ -1,0 +1,14 @@
+scripts/accept_v5.py
+  h_4b190f792175d0 1-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c88ae4700746b7440f9abf95590ee63c8a23695b",
+  "prompts": {},
+  "humans": {
+    "h_4b190f792175d0": {
+      "author": "LinSuki <admin@toddout.work>"
+    }
+  }
+}
