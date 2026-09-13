@@ -1,0 +1,16 @@
+scripts/accept_v5.py
+  h_4b190f792175d0 16,36-40,56
+src/novelai_mcp/v5.py
+  h_4b190f792175d0 20,45-46,105-107,109-113,139,143-151,167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f4f9071e9a82b662854a223c7b6c31090a379e4b",
+  "prompts": {},
+  "humans": {
+    "h_4b190f792175d0": {
+      "author": "LinSuki <admin@toddout.work>"
+    }
+  }
+}
