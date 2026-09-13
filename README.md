@@ -3,7 +3,13 @@
 [![PyPI version](https://badge.fury.io/py/novelai-mcp.svg)](https://pypi.org/project/novelai-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-基于 [novelai-python](https://github.com/LlmKira/novelai-python) SDK 的 MCP 服务器，为 AI 助手提供 NovelAI 图像生成能力。
+MCP 服务器，为美术 Agent 提供 NovelAI 图像生成能力。V5 使用官方图像 API，旧版模型保留 [novelai-python](https://github.com/LlmKira/novelai-python) SDK 路径。
+
+## V5 扩展（当前源码）
+
+支持 `v5-full` 与 `v5-curated`。新增 `generate_v5`（文生图、图生图、SSE）、`upscale_v5`、`suggest_tags_v5`、`prepare_image_v5`、`inspect_image_v5`、`account_v5`、`v5_capabilities`、`v5_parameter_schema`。
+调用前读取能力说明；完整参数、图像输入、各角色正负描述与坐标均可配置。两个模型的局部重绘 infill 已实测不支持；当前 V5 也未开放 Vibe Transfer / Precise Reference。
+详见 [覆盖与真实验收](docs/v5-coverage.md)。本轮 V5 代码尚未发布到 PyPI，以下 uvx 安装仍可能得到旧版本；新功能请从本仓库源码运行。
 
 ## ✨ 功能
 
@@ -14,11 +20,11 @@
 | `suggest_tags` | Danbooru 标签搜索/自动补全 |
 | `check_subscription` | 查询订阅状态和 Anlas 余额 |
 
-### 支持模型
+### 旧版工具支持模型
 
 | 名称 | 模型 ID | 说明 |
 |------|---------|------|
-| `v4.5-full` | nai-diffusion-4-5-full | 最新最完整（默认） |
+| `v4.5-full` | nai-diffusion-4-5-full | 旧版工具默认模型 |
 | `v4.5-curated` | nai-diffusion-4-5-curated | 更干净的数据集 |
 | `v4-full` | nai-diffusion-4-full | V4 Full |
 | `v4-curated` | nai-diffusion-4-curated-preview | V4 预览 |

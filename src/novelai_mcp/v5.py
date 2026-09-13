@@ -18,6 +18,7 @@ GUIDANCE = '''NovelAI 美术工具。V5 优先使用 generate_v5，旧 generate_
 先用 v5_capabilities 核对功能；用 suggest_tags_v5 查询模型对应的标签。标签计数不是训练数据或生成质量的保证。V5 同时支持标签和自然语言，场景构图可以用明确的自然语言描述。
 人物固定外观放在独立 character prompt，场景和风格放在 base prompt；多角色可提供各自坐标与负面提示词。先保存满意的参考图和生成参数，再选择实际支持的图像输入方式保持连续性。
 图生图需要 image_path、strength、noise；低 strength 倾向保留原图，高 strength 改动更大。明确描述要保留与要变化的内容，不能把图生图等同于精确身份复制。
+实测 0.35 可保留大部分画面但不一定改掉目标细节，0.7 能产生更明显变化但也会改变姿态和服装细节。稳定外貌与必须保留的物件需要在提示词中明确描述。
 官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。两个 V5 模型已实测不支持 infill，不要把错误响应附带的图片当作局部重绘结果；独立 upscale 已实测可用。
 prepare_image_v5 可准备画布/尺寸及遮罩。图像处理会保存新文件，原文件保留。API 限流或失败不自动重试。
 使用 seed、采样和完整参数记录复现画面；prompt 的作用与 img2img strength 相互影响。PNG 支持透明度，透明背景还需要在正面描述中明确要求。
@@ -254,7 +255,7 @@ def register(mcp, key, directory):
 
     @mcp.tool()
     async def prepare_image_v5(image_path: str, width: int, height: int, mode: str = 'contain', mask_box: list[int] | None = None, crop_box: list[int] | None = None) -> dict:
-        """准备图像输入，保存新 PNG，保留原文件。contain 等比留边；cover 等比裁切；stretch 拉伸。mask_box=[左,上,右,下] 可另存白色选区/黑色背景遮罩，需与实际 API mask 语义匹配。"""
+        """准备图像输入，保存新 PNG，保留原文件。crop_box=[左,上,右,下] 按原图坐标先裁切；contain 等比留边，cover 等比裁切，stretch 拉伸。mask_box 可另存白色选区/黑色背景遮罩，但 V5 当前不支持 infill。"""
         from PIL import ImageOps, ImageDraw
         if width < 64 or height < 64 or width % 64 or height % 64 or width * height > 16_777_216:
             raise ValueError('画布宽高需为 64 倍数，最大 16MP')
@@ -277,7 +278,7 @@ def register(mcp, key, directory):
         folder = Path(directory()); folder.mkdir(parents=True, exist_ok=True)
         stem = uuid.uuid4().hex
         target = folder / (stem + '-prepared.png'); out.save(target)
-        result = {'path': str(target), 'width': width, 'height': height, 'source': image_path, 'mode': mode}
+        result = {'path': str(target), 'width': width, 'height': height, 'source': image_path, 'mode': mode, 'crop_box': crop_box}
         if mask_box is not None:
             mask = Image.new('L', (width, height), 0); ImageDraw.Draw(mask).rectangle(mask_box, fill=255)
             mask_path = folder / (stem + '-mask.png'); mask.save(mask_path); result['mask_path'] = str(mask_path)
