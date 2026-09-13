@@ -211,7 +211,7 @@ def register(mcp, key, directory):
 
     @mcp.tool()
     async def director_image(image_path: str, operation: str, prompt: str = '', defry: int = 0) -> list:
-        """独立 Director Tools，并非 V5 原生模型功能。operation: bg-removal、lineart、sketch、colorize、emotion、declutter、declutter-keep-bubbles。prompt/defry 原样传给官方接口，按各操作含义使用。保留全部返回图片与原始请求结果，不自动重试。"""
+        """独立 Director Tools，并非 V5 原生模型功能。operation: bg-removal、lineart、sketch、colorize、emotion、declutter、declutter-keep-bubbles。prompt/defry 原样传给官方接口；emotion 的 prompt 使用 mood;;附加描述，例如 happy;;smile（安装 SDK 的格式），正面单人面孔效果更适合。colorize 可用标签描述颜色。保留全部返回图片与原始请求结果，不自动重试。"""
         if operation not in ('bg-removal', 'lineart', 'sketch', 'colorize', 'emotion', 'declutter', 'declutter-keep-bubbles'):
             raise ValueError('未知 Director Tools 操作')
         with Image.open(image_path) as im:
