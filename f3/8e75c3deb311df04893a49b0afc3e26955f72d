@@ -1,0 +1,18 @@
+README.md
+  h_4b190f792175d0 6-12,23,27
+docs/v5-coverage.md
+  h_4b190f792175d0 1-51
+src/novelai_mcp/v5.py
+  h_4b190f792175d0 21,258,281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f38e75c3deb311df04893a49b0afc3e26955f72d",
+  "prompts": {},
+  "humans": {
+    "h_4b190f792175d0": {
+      "author": "LinSuki <admin@toddout.work>"
+    }
+  }
+}
