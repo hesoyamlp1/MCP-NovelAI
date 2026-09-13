@@ -13,7 +13,7 @@ from mcp.client.stdio import stdio_client
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--case', choices=['basic', 'img2img', 'infill', 'upscale'], default='basic')
+    parser.add_argument('--case', choices=['basic', 'img2img', 'infill', 'upscale', 'characters_alpha', 'text'], default='basic')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     out = root / '.runtime/v5-e2e'
@@ -33,7 +33,11 @@ async def main():
                 started = time.time()
                 call = {'model': model, 'prompt': 'An adult woman, age 32, black hair tied in a low ponytail, beige shirt and dark apron, standing in a quiet seaside bookstore, holding a blue book. Detailed anime illustration, warm afternoon light, full body, natural proportions, no text.', 'negative_prompt': 'lowres, blurry, text, watermark', 'seed': 314159, 'width': 832, 'height': 1216}
                 tool = 'generate_v5'
-                if args.case != 'basic':
+                if args.case == 'characters_alpha':
+                    call.update(width=1216,height=832,prompt='2people, two adult friends standing side by side, full body, isolated on transparent background, no scenery, clean detailed anime illustration, no text.', characters=[{'prompt':'woman, age 32, long black hair, white jacket, black trousers', 'x':.25,'y':.5},{'prompt':'man, age 35, short brown hair, navy blue shirt, grey trousers','x':.75,'y':.5}], parameters={'straight_alpha':True,'tag_hint_transparent_background':True})
+                elif args.case == 'text':
+                    call.update(width=1024,height=1024,prompt='A clean hand-painted sign for a small seaside bookstore. Large clear English lettering in the center. Warm cream background with a tiny blue sailboat. Text: BOOKS', parameters={'image_format':'webp'})
+                elif args.case != 'basic':
                     prior = json.loads((out / (model + '-basic.receipt.json')).read_text())
                     image = prior['files'][0]['path']
                     if args.case == 'img2img':
@@ -49,7 +53,7 @@ async def main():
                 if result.isError:
                     print(json.dumps({'model': model, 'case': args.case, 'ok': False, 'error': [c.text for c in result.content if c.type == 'text'], 'seconds': time.time()-started}, ensure_ascii=False), flush=True)
                     if args.case == 'basic':
-                        return
+                        raise RuntimeError('基础生成验收失败')
                     continue
                 receipt = json.loads(next(c.text for c in result.content if c.type == 'text'))
                 (out / (model + '-' + args.case + '.receipt.json')).write_text(json.dumps(receipt, ensure_ascii=False, indent=2))

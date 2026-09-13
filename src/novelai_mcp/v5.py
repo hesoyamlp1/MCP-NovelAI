@@ -17,7 +17,7 @@ GUIDANCE = '''NovelAI 美术工具。V5 优先使用 generate_v5，旧 generate_
 先用 v5_capabilities 核对功能；用 suggest_tags_v5 查询模型对应的标签。标签计数不是训练数据或生成质量的保证。V5 同时支持标签和自然语言，场景构图可以用明确的自然语言描述。
 人物固定外观放在独立 character prompt，场景和风格放在 base prompt；多角色可提供各自坐标与负面提示词。先保存满意的参考图和生成参数，再选择实际支持的图像输入方式保持连续性。
 图生图需要 image_path、strength、noise；低 strength 倾向保留原图，高 strength 改动更大。明确描述要保留与要变化的内容，不能把图生图等同于精确身份复制。
-官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。infill 与独立 upscale 以实际接口结果为准，能力表会标注验证状态。
+官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。两个 V5 模型已实测不支持 infill，不要把错误响应附带的图片当作局部重绘结果；独立 upscale 已实测可用。
 prepare_image_v5 可准备画布/尺寸及遮罩。图像处理会保存新文件，原文件保留。API 限流或失败不自动重试。
 使用 seed、采样和完整参数记录复现画面；prompt 的作用与 img2img strength 相互影响。PNG 支持透明度，透明背景还需要在正面描述中明确要求。
 工具可预览最终 payload；预览不是实际生成。每次成功生成返回文件、尺寸、哈希与请求记录；用户可见结果需查看图片。'''
@@ -42,6 +42,8 @@ def build_payload(prompt, model='v5-full', action='generate', width=832, height=
                   negative_prompt='', characters=None, image_path=None, mask_path=None,
                   strength=.5, noise=0., seed=None, parameters=None):
     model_id = resolve_model(model)
+    if action == 'infill':
+        raise ValueError('V5 Full 和 Curated 的官方接口已实测不支持 infill；没有提交生成请求')
     if action not in ('generate', 'img2img', 'infill'):
         raise ValueError('action 必须是 generate / img2img / infill')
     if width < 64 or height < 64 or width % 64 or height % 64:
@@ -100,9 +102,15 @@ class Client:
         record_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
         async with httpx.AsyncClient(timeout=180, headers={'Authorization': 'Bearer ' + self.key, 'User-Agent': 'NovelAI-MCP/0.2.0', 'Accept': 'application/json'}) as client:
             response = await client.post('https://image.novelai.net' + endpoint, json=payload)
-        receipt = {'operation_id': operation, 'status': response.status_code, 'correlation_id': response.headers.get('x-correlation-id'), 'request_path': str(record_path), 'files': []}
+        response_path = self.directory / (operation + '.response.bin')
+        response_path.write_bytes(response.content)
+        receipt = {'operation_id': operation, 'status': response.status_code, 'correlation_id': response.headers.get('x-correlation-id'), 'request_path': str(record_path), 'response_path': str(response_path), 'files': []}
         if not response.is_success:
-            receipt['error'] = response.text
+            try:
+                error, _ = json.JSONDecoder().raw_decode(response.text)
+                receipt['error'] = error
+            except ValueError:
+                receipt['error'] = {'message': '非 JSON 错误响应，原文保存在 response_path'}
             (self.directory / (operation + '.result.json')).write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
             raise RuntimeError(json.dumps(receipt, ensure_ascii=False))
         if 'json' in response.headers.get('content-type', ''):
@@ -128,9 +136,18 @@ def register(mcp, key, directory):
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
         return {'models': MODELS, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
-                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'requires_model_specific_verification': ['infill', 'upscale', 'streaming'],
+                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale'], 'verified_unsupported': ['infill'], 'requires_model_specific_verification': ['streaming'],
                 'prompt_limits_approx_tokens': {'v5-full': {'base': 1471, 'text': 750}, 'v5-curated': {'base': 703, 'text': 374}},
                 'references': ['https://novelai.net/v5', 'https://docs.novelai.net/en/image/models/', 'https://image.novelai.net/docs/doc.json'], 'guide': GUIDANCE}
+
+    @mcp.tool()
+    async def v5_parameter_schema() -> dict:
+        """读取官方图像 API 参数结构；共享字段不代表 V5 全部支持，结合 v5_capabilities 使用。"""
+        async with httpx.AsyncClient(timeout=30) as http:
+            response = await http.get('https://image.novelai.net/docs/doc.json')
+            response.raise_for_status()
+        definitions = response.json()['definitions']
+        return {'source': 'https://image.novelai.net/docs/doc.json', 'schemas': {k: v for k, v in definitions.items() if k.startswith('image.')}, 'note': '这些是图像服务共享 schema；V5 目前不支持 infill、Vibe Transfer 和 Precise Reference。'}
 
     @mcp.tool()
     async def suggest_tags_v5(query: str, model: str = 'v5-full', language: str = 'en') -> dict:
@@ -147,7 +164,7 @@ def register(mcp, key, directory):
     async def generate_v5(prompt: str, model: str = 'v5-full', action: str = 'generate', width: int = 832, height: int = 1216,
                           negative_prompt: str = '', characters: list[dict] | None = None, image_path: str | None = None, mask_path: str | None = None,
                           strength: float = .5, noise: float = 0., seed: int | None = None, parameters: dict | None = None, preview_only: bool = False) -> list:
-        """V5 文生图/图生图/局部重绘请求。characters 每项含 prompt、negative_prompt、x、y；parameters 对应官方 RequestParameters，可设置采样/步数/引导/格式/透明背景等完整参数。infill 需按能力记录验证。不会自动重试失败请求。"""
+        """V5 文生图/图生图请求。characters 每项含 prompt、negative_prompt、x、y；parameters 对应官方 RequestParameters，可设置采样/步数/引导/格式/透明背景等参数。infill 已实测不支持，会在提交前拒绝。不会自动重试失败请求。"""
         payload = build_payload(prompt, model, action, width, height, negative_prompt, characters, image_path, mask_path, strength, noise, seed, parameters)
         if preview_only:
             return [TextContent(type='text', text=json.dumps({'preview_only': True, 'payload': payload}, ensure_ascii=False))]
