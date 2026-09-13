@@ -115,6 +115,8 @@ def build_payload(prompt, model='v5-full', action='generate', width=832, height=
         params['mask'] = read_image(mask_path)
         params['img2img'] = {'strength': strength, 'noise': noise, 'extra_noise_seed': actual_seed}
     params.update(parameters or {})
+    if any(not isinstance(params.get(k), int) or params[k] < 64 or params[k] % 64 for k in ('width', 'height')):
+        raise ValueError('最终宽高必须是至少 64 的 64 倍数')
     if any(k.startswith('director_reference_') or k.startswith('reference_') for k in params):
         raise ValueError('官方当前 V5 未开放 Vibe Transfer/Precise Reference；请使用实际支持的 img2img 输入')
     if params.get('image_format') not in ('png', 'webp'):
@@ -194,7 +196,7 @@ def register(mcp, key, directory):
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
         return {'models': MODELS, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
-                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale'], 'verified_unsupported': ['infill'], 'requires_model_specific_verification': ['streaming'],
+                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale', 'sse_streaming', 'multi_character', 'transparent_background', 'png', 'webp', 'text_rendering'], 'verified_unsupported': ['infill'],
                 'prompt_limits_approx_tokens': {'v5-full': {'base': 1471, 'text': 750}, 'v5-curated': {'base': 703, 'text': 374}},
                 'references': ['https://novelai.net/v5', 'https://docs.novelai.net/en/image/models/', 'https://image.novelai.net/docs/doc.json'], 'guide': GUIDANCE}
 
@@ -232,19 +234,38 @@ def register(mcp, key, directory):
         return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))] + [ImageContent(type='image', data=base64.b64encode(Path(f['path']).read_bytes()).decode(), mimeType='image/' + Path(f['path']).suffix[1:]) for f in receipt['files']]
 
     @mcp.tool()
+    async def inspect_image_v5(image_path: str, include_image: bool = True) -> list:
+        """查看参考图尺寸、透明度及生成元数据；可同时返回原图给具备视觉能力的美术 Agent 检查。"""
+        with Image.open(image_path) as im:
+            metadata = {'path': image_path, 'width': im.width, 'height': im.height, 'mode': im.mode, 'metadata': im.info}
+            if im.mode == 'RGBA':
+                metadata['alpha_range'] = im.getchannel('A').getextrema()
+            fmt = im.format.lower()
+        result = [TextContent(type='text', text=json.dumps(metadata, ensure_ascii=False, default=str))]
+        if include_image:
+            result.append(ImageContent(type='image', data=read_image(image_path), mimeType='image/' + ('jpeg' if fmt == 'jpg' else fmt)))
+        return result
+
+    @mcp.tool()
     async def upscale_v5(image_path: str, model: str = 'v5-full', declared_blur_sigma: float = 0.) -> list:
         """官方独立放大接口；支持情况需按 V5 各模型真实返回确认，不假称是生成模型的能力。"""
         receipt = await client().generate({'image': read_image(image_path), 'model': resolve_model(model), 'declared_blur_sigma': declared_blur_sigma}, '/ai/upscale')
         return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))]
 
     @mcp.tool()
-    async def prepare_image_v5(image_path: str, width: int, height: int, mode: str = 'contain', mask_box: list[int] | None = None) -> dict:
+    async def prepare_image_v5(image_path: str, width: int, height: int, mode: str = 'contain', mask_box: list[int] | None = None, crop_box: list[int] | None = None) -> dict:
         """准备图像输入，保存新 PNG，保留原文件。contain 等比留边；cover 等比裁切；stretch 拉伸。mask_box=[左,上,右,下] 可另存白色选区/黑色背景遮罩，需与实际 API mask 语义匹配。"""
         from PIL import ImageOps, ImageDraw
         if width < 64 or height < 64 or width % 64 or height % 64 or width * height > 16_777_216:
             raise ValueError('画布宽高需为 64 倍数，最大 16MP')
+        if mask_box is not None and (len(mask_box) != 4 or not 0 <= mask_box[0] < mask_box[2] <= width or not 0 <= mask_box[1] < mask_box[3] <= height):
+            raise ValueError('mask_box 超出画布')
         with Image.open(image_path) as im:
             im = im.convert('RGBA')
+            if crop_box is not None:
+                if len(crop_box) != 4 or not 0 <= crop_box[0] < crop_box[2] <= im.width or not 0 <= crop_box[1] < crop_box[3] <= im.height:
+                    raise ValueError('crop_box 超出原图')
+                im = im.crop(crop_box)
             if mode == 'contain':
                 out = Image.new('RGBA', (width, height), (255, 255, 255, 255)); fitted = ImageOps.contain(im, (width, height)); out.paste(fitted, ((width-fitted.width)//2, (height-fitted.height)//2))
             elif mode == 'cover':
@@ -258,8 +279,6 @@ def register(mcp, key, directory):
         target = folder / (stem + '-prepared.png'); out.save(target)
         result = {'path': str(target), 'width': width, 'height': height, 'source': image_path, 'mode': mode}
         if mask_box is not None:
-            if len(mask_box) != 4 or not 0 <= mask_box[0] < mask_box[2] <= width or not 0 <= mask_box[1] < mask_box[3] <= height:
-                raise ValueError('mask_box 超出画布')
             mask = Image.new('L', (width, height), 0); ImageDraw.Draw(mask).rectangle(mask_box, fill=255)
             mask_path = folder / (stem + '-mask.png'); mask.save(mask_path); result['mask_path'] = str(mask_path)
         return result
