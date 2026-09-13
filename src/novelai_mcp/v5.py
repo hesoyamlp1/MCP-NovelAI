@@ -11,6 +11,7 @@ import zipfile
 import httpx
 from PIL import Image
 from mcp.types import ImageContent, TextContent
+from mcp.server.fastmcp import Context
 
 MODELS = {'v5-full': 'nai-diffusion-5-full', 'v5-curated': 'nai-diffusion-5-curated'}
 GUIDANCE = '''NovelAI 美术工具。V5 优先使用 generate_v5，旧 generate_image/img2img 保留给旧模型。
@@ -36,6 +37,43 @@ def read_image(path):
     with Image.open(io.BytesIO(data)) as im:
         im.verify()
     return base64.b64encode(data).decode()
+
+
+def sse_images(content):
+    images = {}
+    event_name = ''
+    for line in content.decode().splitlines():
+        if line.startswith('event:'):
+            event_name = line[6:].strip()
+            continue
+        if not line.startswith('data:'):
+            continue
+        try:
+            event = json.loads(line[5:].strip())
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        label = str(event.get('type') or event.get('event') or event_name).lower()
+        if 'error' in label:
+            raise RuntimeError('SSE 生成失败：' + str(event.get('message', event.get('error', '见原始响应'))))
+        if 'final' not in label:
+            continue
+        def visit(value):
+            if not isinstance(value, dict):
+                return
+            for key in ('image', 'data'):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate.startswith(('iVBOR', 'UklGR')):
+                    images[str(value.get('index', 0))] = base64.b64decode(candidate)
+            for nested in value.values():
+                if isinstance(nested, dict):
+                    visit(nested)
+                elif isinstance(nested, list):
+                    for item in nested:
+                        visit(item)
+        visit(event)
+    return list(images.items())
 
 
 def build_payload(prompt, model='v5-full', action='generate', width=832, height=1216,
@@ -95,13 +133,29 @@ class Client:
         response.raise_for_status()
         return response.json()
 
-    async def generate(self, payload, endpoint='/ai/generate-image'):
+    async def generate(self, payload, endpoint='/ai/generate-image', progress=None):
         self.directory.mkdir(parents=True, exist_ok=True)
         operation = uuid.uuid4().hex
         record_path = self.directory / (operation + '.request.json')
         record_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-        async with httpx.AsyncClient(timeout=180, headers={'Authorization': 'Bearer ' + self.key, 'User-Agent': 'NovelAI-MCP/0.2.0', 'Accept': 'application/json'}) as client:
-            response = await client.post('https://image.novelai.net' + endpoint, json=payload)
+        async with httpx.AsyncClient(timeout=180, headers={'Authorization': 'Bearer ' + self.key, 'User-Agent': 'NovelAI-MCP/0.2.0', 'Accept': 'text/event-stream' if endpoint.endswith('-stream') else 'application/json'}) as client:
+            if endpoint.endswith('-stream'):
+                chunks, buffer = [], b''
+                async with client.stream('POST', 'https://image.novelai.net' + endpoint, json=payload) as stream:
+                    async for chunk in stream.aiter_bytes():
+                        chunks.append(chunk); buffer += chunk
+                        while b'\n' in buffer:
+                            line, buffer = buffer.split(b'\n', 1)
+                            if progress and line.startswith(b'data:'):
+                                try:
+                                    event = json.loads(line[5:])
+                                    if isinstance(event, dict) and isinstance(event.get('step'), (int, float)):
+                                        await progress(event['step'], payload['parameters'].get('steps'))
+                                except (ValueError, KeyError):
+                                    pass
+                    response = httpx.Response(stream.status_code, headers=stream.headers, content=b''.join(chunks), request=stream.request)
+            else:
+                response = await client.post('https://image.novelai.net' + endpoint, json=payload)
         response_path = self.directory / (operation + '.response.bin')
         response_path.write_bytes(response.content)
         receipt = {'operation_id': operation, 'status': response.status_code, 'correlation_id': response.headers.get('x-correlation-id'), 'request_path': str(record_path), 'response_path': str(response_path), 'files': []}
@@ -113,11 +167,15 @@ class Client:
                 receipt['error'] = {'message': '非 JSON 错误响应，原文保存在 response_path'}
             (self.directory / (operation + '.result.json')).write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
             raise RuntimeError(json.dumps(receipt, ensure_ascii=False))
-        if 'json' in response.headers.get('content-type', ''):
+        if 'text/event-stream' in response.headers.get('content-type', ''):
+            images = sse_images(response.content)
+        elif 'json' in response.headers.get('content-type', ''):
             images = [(str(i.get('index', n)), base64.b64decode(i['image'])) for n, i in enumerate(response.json()['images'])]
         else:
             with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
                 images = [(str(n), archive.read(name)) for n, name in enumerate(archive.namelist()) if name.lower().endswith(('.png', '.webp'))]
+        if not images:
+            raise RuntimeError('响应未包含可用图片；原响应保存在 ' + str(response_path))
         for index, data in images:
             with Image.open(io.BytesIO(data)) as im:
                 fmt, size, mode = im.format.lower(), im.size, im.mode
@@ -163,12 +221,14 @@ def register(mcp, key, directory):
     @mcp.tool()
     async def generate_v5(prompt: str, model: str = 'v5-full', action: str = 'generate', width: int = 832, height: int = 1216,
                           negative_prompt: str = '', characters: list[dict] | None = None, image_path: str | None = None, mask_path: str | None = None,
-                          strength: float = .5, noise: float = 0., seed: int | None = None, parameters: dict | None = None, preview_only: bool = False) -> list:
+                          strength: float = .5, noise: float = 0., seed: int | None = None, parameters: dict | None = None, preview_only: bool = False, stream: bool = False, ctx: Context = None) -> list:
         """V5 文生图/图生图请求。characters 每项含 prompt、negative_prompt、x、y；parameters 对应官方 RequestParameters，可设置采样/步数/引导/格式/透明背景等参数。infill 已实测不支持，会在提交前拒绝。不会自动重试失败请求。"""
         payload = build_payload(prompt, model, action, width, height, negative_prompt, characters, image_path, mask_path, strength, noise, seed, parameters)
+        if stream:
+            payload['parameters']['stream'] = 'sse'
         if preview_only:
             return [TextContent(type='text', text=json.dumps({'preview_only': True, 'payload': payload}, ensure_ascii=False))]
-        receipt = await client().generate(payload)
+        receipt = await client().generate(payload, '/ai/generate-image-stream' if stream else '/ai/generate-image', ctx.report_progress if ctx else None)
         return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))] + [ImageContent(type='image', data=base64.b64encode(Path(f['path']).read_bytes()).decode(), mimeType='image/' + Path(f['path']).suffix[1:]) for f in receipt['files']]
 
     @mcp.tool()

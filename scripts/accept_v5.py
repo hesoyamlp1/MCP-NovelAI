@@ -13,7 +13,7 @@ from mcp.client.stdio import stdio_client
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--case', choices=['basic', 'img2img', 'infill', 'upscale', 'characters_alpha', 'text'], default='basic')
+    parser.add_argument('--case', choices=['basic', 'img2img', 'img2img_stronger', 'infill', 'upscale', 'characters_alpha', 'text', 'stream'], default='basic')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     out = root / '.runtime/v5-e2e'
@@ -37,11 +37,15 @@ async def main():
                     call.update(width=1216,height=832,prompt='2people, two adult friends standing side by side, full body, isolated on transparent background, no scenery, clean detailed anime illustration, no text.', characters=[{'prompt':'woman, age 32, long black hair, white jacket, black trousers', 'x':.25,'y':.5},{'prompt':'man, age 35, short brown hair, navy blue shirt, grey trousers','x':.75,'y':.5}], parameters={'straight_alpha':True,'tag_hint_transparent_background':True})
                 elif args.case == 'text':
                     call.update(width=1024,height=1024,prompt='A clean hand-painted sign for a small seaside bookstore. Large clear English lettering in the center. Warm cream background with a tiny blue sailboat. Text: BOOKS', parameters={'image_format':'webp'})
+                elif args.case == 'stream':
+                    call.update(stream=True, width=1024, height=1024, prompt='A peaceful seaside bookstore at blue hour, warm lights in the windows, no people, detailed anime background illustration, no text.')
                 elif args.case != 'basic':
                     prior = json.loads((out / (model + '-basic.receipt.json')).read_text())
                     image = prior['files'][0]['path']
-                    if args.case == 'img2img':
+                    if args.case in ('img2img', 'img2img_stronger'):
                         call.update(action='img2img', image_path=image, strength=.35, noise=0., prompt=call['prompt'].replace('blue book', 'red book').replace('afternoon', 'evening'))
+                        if args.case == 'img2img_stronger':
+                            call.update(strength=.7, prompt=call['prompt'] + ' The book cover is bright red. Cool blue evening light outside the windows.')
                     elif args.case == 'infill':
                         prep = await session.call_tool('prepare_image_v5', {'image_path': image, 'width': 832, 'height': 1216, 'mask_box': [200, 420, 630, 800]})
                         data = json.loads(next(c.text for c in prep.content if c.type == 'text'))
