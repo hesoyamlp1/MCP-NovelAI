@@ -27,3 +27,6 @@ Thumbs.db
 
 # Generated images (optional, uncomment if needed)
 # *.png
+
+# Local credentials and acceptance artifacts
+.runtime/
