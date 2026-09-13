@@ -1,0 +1,19 @@
+.gitignore
+  s_4c3c29970abeab::t_5cee82939bb0a7 30-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bf86bb651fd51d1bb4051eb4e45205ea763f5180",
+  "prompts": {},
+  "sessions": {
+    "s_4c3c29970abeab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a099ba-fdd2-7023-9424-d7d8f07c7dd6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LinSuki <admin@toddout.work>"
+    }
+  }
+}
