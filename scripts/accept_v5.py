@@ -13,7 +13,7 @@ from mcp.client.stdio import stdio_client
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--case', choices=['basic', 'img2img', 'img2img_stronger', 'infill', 'upscale', 'characters_alpha', 'text', 'stream'], default='basic')
+    parser.add_argument('--case', choices=['basic', 'img2img', 'img2img_stronger', 'infill', 'upscale', 'characters_alpha', 'text', 'stream', 'director_lineart', 'director_bg-removal'], default='basic')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     out = root / '.runtime/v5-e2e'
@@ -50,6 +50,8 @@ async def main():
                         prep = await session.call_tool('prepare_image_v5', {'image_path': image, 'width': 832, 'height': 1216, 'mask_box': [200, 420, 630, 800]})
                         data = json.loads(next(c.text for c in prep.content if c.type == 'text'))
                         call.update(action='infill', image_path=data['path'], mask_path=data['mask_path'])
+                    elif args.case.startswith('director_'):
+                        tool, call = 'director_image', {'image_path': image, 'operation': args.case[len('director_'):]}
                     else:
                         tool, call = 'upscale_v5', {'model': model, 'image_path': image}
                 result = await session.call_tool(tool, call, read_timeout_seconds=__import__('datetime').timedelta(seconds=240))
