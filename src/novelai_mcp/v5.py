@@ -194,6 +194,22 @@ def register(mcp, key, directory):
         return Client(key(), directory())
 
     @mcp.tool()
+    async def import_image_v5(image_base64: str) -> dict:
+        """导入调用方提供的参考图片原始字节，验证图像后保存独立文件；返回服务端路径供图生图使用。"""
+        if len(image_base64) > 40_000_000:
+            raise ValueError('参考图最大 30 MB')
+        data = base64.b64decode(image_base64, validate=True)
+        with Image.open(io.BytesIO(data)) as im:
+            fmt, size = im.format.lower(), im.size
+            im.verify()
+        if fmt not in ('png', 'jpeg', 'webp'):
+            raise ValueError('参考图需为 PNG、JPEG 或 WebP')
+        folder = Path(directory()); folder.mkdir(parents=True, exist_ok=True)
+        target = folder / (uuid.uuid4().hex + '-reference.' + fmt)
+        target.write_bytes(data)
+        return {'path': str(target), 'width': size[0], 'height': size[1], 'sha256': hashlib.sha256(data).hexdigest()}
+
+    @mcp.tool()
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
         return {'models': MODELS, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
