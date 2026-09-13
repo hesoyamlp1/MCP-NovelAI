@@ -1,0 +1,19 @@
+scripts/accept_v5.py
+  s_4c3c29970abeab::t_7187574f41bd6e 16,53-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "013614da2b608338a3641774dd82dc00df6fd1b6",
+  "prompts": {},
+  "sessions": {
+    "s_4c3c29970abeab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a099ba-fdd2-7023-9424-d7d8f07c7dd6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LinSuki <admin@toddout.work>"
+    }
+  }
+}
