@@ -1,0 +1,14 @@
+src/novelai_mcp/v5.py
+  h_4b190f792175d0 285-287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "287c2c14e2ddda568de92d91accfc0a9c73ac414",
+  "prompts": {},
+  "humans": {
+    "h_4b190f792175d0": {
+      "author": "LinSuki <admin@toddout.work>"
+    }
+  }
+}
