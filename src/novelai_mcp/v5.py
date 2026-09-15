@@ -80,12 +80,14 @@ def sse_images(content):
 
 def build_payload(prompt, model='v5-full', action='generate', width=832, height=1216,
                   negative_prompt='', characters=None, image_path=None, mask_path=None,
-                  strength=.5, noise=0., seed=None, parameters=None):
+                  strength=None, noise=0., seed=None, parameters=None):
     model_id = REFERENCE_MODELS.get(model) or (model if model in REFERENCE_MODELS.values() else resolve_model(model))
     if action == 'infill':
         if model_id == MODELS['v5-curated']:
             raise ValueError('V5 Curated 尚无已确认的原生局部重绘；请明确选择 v5-full 或 v4.5-curated，不自动换模型')
         model_id += '-inpainting'
+    if strength is None:
+        strength = 1. if action == 'infill' else .5
     if action not in ('generate', 'img2img', 'infill'):
         raise ValueError('action 必须是 generate / img2img / infill')
     if width < 64 or height < 64 or width % 64 or height % 64:
@@ -93,7 +95,7 @@ def build_payload(prompt, model='v5-full', action='generate', width=832, height=
     if not 0 <= strength <= 1 or not 0 <= noise <= 1:
         raise ValueError('strength/noise 应在 0–1 之间')
     chars = characters or []
-    limit = 22 if model_id.startswith('nai-diffusion-5-') else 6
+    limit = 32 if model_id.startswith('nai-diffusion-5-') else 6
     if len(chars) > limit:
         raise ValueError(f'当前模型最多 {limit} 个独立角色描述')
     positive, negative = [], []
@@ -105,7 +107,7 @@ def build_payload(prompt, model='v5-full', action='generate', width=832, height=
         positive.append({'char_caption': char['prompt'], 'centers': centers})
         negative.append({'char_caption': char.get('negative_prompt', ''), 'centers': centers})
     actual_seed = seed if seed is not None else secrets.randbelow(2**32)
-    params = {'params_version': 3, 'width': width, 'height': height, 'scale': 5., 'sampler': 'k_euler_ancestral', 'steps': 28, 'n_samples': 1, 'seed': actual_seed,
+    params = {'params_version': 4, 'width': width, 'height': height, 'scale': 5., 'sampler': 'k_euler_ancestral', 'steps': 28, 'n_samples': 1, 'seed': actual_seed,
               'noise_schedule': 'karras', 'qualityToggle': False, 'ucPreset': 3, 'negative_prompt': negative_prompt,
               'v4_prompt': {'caption': {'base_caption': prompt, 'char_captions': positive}, 'use_coords': bool(chars), 'use_order': True},
               'v4_negative_prompt': {'caption': {'base_caption': negative_prompt, 'char_captions': negative}, 'use_coords': bool(chars), 'legacy_uc': False},
@@ -264,7 +266,7 @@ def register(mcp, key, directory):
     @mcp.tool()
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
-        return {'models': MODELS, 'independent_director_tools': {'tool': 'director_image', 'verified_on_v5_source_images': ['lineart', 'bg-removal', 'sketch', 'colorize', 'emotion', 'declutter', 'declutter-keep-bubbles'], 'effect_limits': '生成式处理可能同时改变文字、颜色、衣服和背景；必须保留原图并检查结果，非精确局部编辑。'}, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
+        return {'models': MODELS, 'independent_director_tools': {'tool': 'director_image', 'verified_on_v5_source_images': ['lineart', 'bg-removal', 'sketch', 'colorize', 'emotion', 'declutter', 'declutter-keep-bubbles'], 'effect_limits': '生成式处理可能同时改变文字、颜色、衣服和背景；必须保留原图并检查结果，非精确局部编辑。'}, 'documented': ['text_to_image', 'image_to_image', 'character_prompts_ui_limit_32', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
                 'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale', 'sse_streaming', 'multi_character', 'transparent_background', 'png', 'webp', 'text_rendering'], 'verified_unsupported': [], 'inpainting': {'v5-full': {'model': 'nai-diffusion-5-full-inpainting', 'documented': True, 'verification': 'pending_retest'}, 'v5-curated': {'native': False, 'explicit_alternative': 'v4.5-curated'}}, 'reference_models': REFERENCE_MODELS, 'reference_tool': 'generate_reference',
                 'prompt_limits_approx_tokens': {'v5-full': {'base': 1471, 'text': 750}, 'v5-curated': {'base': 703, 'text': 374}},
                 'references': ['https://novelai.net/v5', 'https://docs.novelai.net/en/image/models/', 'https://image.novelai.net/docs/doc.json'], 'guide': GUIDANCE}
@@ -292,13 +294,15 @@ def register(mcp, key, directory):
     @mcp.tool()
     async def generate_reference(prompt: str, image_path: str, model: str = 'v4.5-full', reference_mode: str = 'precise',
                                  width: int = 832, height: int = 1216, reference_type: str = 'character',
-                                 strength: float = .7, fidelity: float = .8, noise: float = 0.,
+                                 strength: float | None = None, fidelity: float = .8, noise: float = 0., reference_strength: float = 1.,
                                  mask_path: str | None = None, identity_reference_path: str | None = None,
                                  negative_prompt: str = '', characters: list[dict] | None = None,
                                  seed: int | None = None, parameters: dict | None = None, preview_only: bool = False) -> list:
         """带图生成，返回实际模型与原始请求/图片。precise 保持身份/风格并重新构图（仅 V4.5）；img2img 基于底图重绘（V5/V4.5）；infill 遮罩局部重绘（V5 Full/V4.5）。infill 可另给 identity_reference_path（仅 V4.5）。不静默换模型。"""
         if reference_mode not in ('precise', 'img2img', 'infill'):
             raise ValueError('reference_mode 需为 precise / img2img / infill')
+        if strength is None:
+            strength = 1. if reference_mode == 'infill' else (.7 if reference_mode == 'precise' else .5)
         is_precise = reference_mode == 'precise' or bool(identity_reference_path)
         if is_precise and model not in (*REFERENCE_MODELS, *REFERENCE_MODELS.values()):
             raise ValueError('Precise Reference 只支持 V4.5，请明确选择 v4.5-full 或 v4.5-curated')
@@ -308,7 +312,7 @@ def register(mcp, key, directory):
         if is_precise:
             if any(k.startswith(('reference_', 'director_reference_')) for k in params):
                 raise ValueError('请使用专用参考参数，避免混合或覆盖参考方式')
-            params.update(reference_fields(precise_image(identity_reference_path or image_path), reference_type, fidelity, strength))
+            params.update(reference_fields(precise_image(identity_reference_path or image_path), reference_type, fidelity, strength if reference_mode == 'precise' else reference_strength))
         payload = build_payload(prompt, model, 'generate' if reference_mode == 'precise' else reference_mode,
                                 width, height, negative_prompt, characters, None if reference_mode == 'precise' else image_path,
                                 mask_path, strength, noise, seed, params)
@@ -321,7 +325,7 @@ def register(mcp, key, directory):
     @mcp.tool()
     async def generate_v5(prompt: str, model: str = 'v5-full', action: str = 'generate', width: int = 832, height: int = 1216,
                           negative_prompt: str = '', characters: list[dict] | None = None, image_path: str | None = None, mask_path: str | None = None,
-                          strength: float = .5, noise: float = 0., seed: int | None = None, parameters: dict | None = None, preview_only: bool = False, stream: bool = False, ctx: Context = None) -> list:
+                          strength: float | None = None, noise: float = 0., seed: int | None = None, parameters: dict | None = None, preview_only: bool = False, stream: bool = False, ctx: Context = None) -> list:
         """V5 文生图/图生图，Full 支持 infill 并使用独立 inpainting 模型；Curated 不自动回退。characters 每项含 prompt、negative_prompt、x、y；parameters 为官方采样/步数/引导等设置。不会自动重试失败请求。"""
         resolve_model(model)
         payload = build_payload(prompt, model, action, width, height, negative_prompt, characters, image_path, mask_path, strength, noise, seed, parameters)

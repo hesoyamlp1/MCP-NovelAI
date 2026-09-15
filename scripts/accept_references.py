@@ -14,7 +14,8 @@ from mcp.client.stdio import stdio_client
 async def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--case',required=True,choices=['v5_full_infill','v45_full_reference','v45_curated_reference','v45_curated_infill','v5_curated_img2img'])
-    case=parser.parse_args().case
+    parser.add_argument('--strength',type=float)
+    options=parser.parse_args();case=options.case
     root=Path(__file__).resolve().parents[1]
     out=root/'.runtime/reference-repair'/f'{case}-{time.time_ns()}';out.mkdir(parents=True,exist_ok=True)
     source=json.loads((root/'.runtime/v5-e2e/v5-full-basic.receipt.json').read_text())['files'][0]['path']
@@ -37,6 +38,7 @@ async def main():
                 call.update(reference_mode='img2img',model='v5-curated',strength=.5)
             else:
                 call.update(reference_mode='precise',model='v4.5-full' if 'full' in case else 'v4.5-curated',reference_type='character',strength=.7,fidelity=.85)
+            if options.strength is not None:call['strength']=options.strength
             (out/(case+'.input.json')).write_text(json.dumps(call,ensure_ascii=False,indent=2))
             result=await session.call_tool('generate_reference',call,read_timeout_seconds=timedelta(seconds=240))
             (out/(case+'.tool-result.json')).write_text(result.model_dump_json(indent=2))

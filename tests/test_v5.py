@@ -28,7 +28,7 @@ class V5Tests(unittest.TestCase):
             for model, expected in [('v5-full','nai-diffusion-5-full-inpainting'),('v4.5-full','nai-diffusion-4-5-full-inpainting'),('v4.5-curated','nai-diffusion-4-5-curated-inpainting')]:
                 p=build_payload('red book',model=model,action='infill',width=64,height=64,image_path=image,mask_path=mask)
                 self.assertEqual(p['model'],expected)
-                self.assertEqual(p['parameters']['img2img']['strength'],.5)
+                self.assertEqual(p['parameters']['img2img']['strength'],1.)
             Image.new('L',(128,64)).save(mask)
             with self.assertRaisesRegex(ValueError,'尺寸'):
                 build_payload('book',action='infill',width=64,height=64,image_path=image,mask_path=mask)
@@ -47,7 +47,7 @@ class V5Tests(unittest.TestCase):
 
     def test_v5_character_limit_and_dimensions(self):
         with self.assertRaises(ValueError):
-            build_payload('book', characters=[{'prompt': 'person'}] * 23)
+            build_payload('book', characters=[{'prompt': 'person'}] * 33)
         with self.assertRaises(ValueError):
             build_payload('book', width=833)
 
