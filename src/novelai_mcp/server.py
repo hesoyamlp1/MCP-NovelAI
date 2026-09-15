@@ -464,7 +464,7 @@ async def img2img(
     seed: Annotated[int | None, "随机种子。"] = None,
     reference_image_paths: Annotated[
         list[str] | None,
-        "【Vibe Transfer】参考图片的文件绝对路径列表（最多 16 张）。免费（Opus），风格迁移。"
+        "【Vibe Transfer】参考图片的文件绝对路径列表（最多 16 张）。风格与特征引导，费用依官方接口。"
     ] = None,
     reference_strength: Annotated[
         float,
@@ -494,9 +494,13 @@ async def img2img(
     - 用户想修改或变换现有图片时
     - 用户提供了一张参考图并要求在此基础上修改
 
-    支持 Vibe Transfer + Precise Reference（可同时使用）。
+    支持 Vibe Transfer 或 Precise Reference，两者不可同时使用；Precise Reference 仅 V4.5。
     """
     resolved_model = resolve_model(model)
+    if precise_reference_image_path and reference_image_paths:
+        raise ValueError("Precise Reference 与 Vibe Transfer 不兼容，请选择一种")
+    if precise_reference_image_path and not resolved_model.value.startswith('nai-diffusion-4-5-'):
+        raise ValueError("Precise Reference 仅支持 V4.5")
     actual_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
     path = Path(image_path)

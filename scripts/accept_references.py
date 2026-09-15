@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from datetime import timedelta
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -15,7 +16,7 @@ async def main():
     parser.add_argument('--case',required=True,choices=['v5_full_infill','v45_full_reference','v45_curated_reference','v45_curated_infill','v5_curated_img2img'])
     case=parser.parse_args().case
     root=Path(__file__).resolve().parents[1]
-    out=root/'.runtime/reference-repair';out.mkdir(parents=True,exist_ok=True)
+    out=root/'.runtime/reference-repair'/f'{case}-{time.time_ns()}';out.mkdir(parents=True,exist_ok=True)
     source=json.loads((root/'.runtime/v5-e2e/v5-full-basic.receipt.json').read_text())['files'][0]['path']
     env=dict(os.environ)
     for line in (root/'.runtime/novelai.env').read_text().splitlines():
@@ -44,7 +45,7 @@ async def main():
                 raise SystemExit(1)
             receipt=json.loads(next(c.text for c in result.content if c.type=='text'))
             (out/(case+'.receipt.json')).write_text(json.dumps(receipt,ensure_ascii=False,indent=2))
-            print(json.dumps({'case':case,'ok':True,'model':receipt.get('model'),'files':receipt['files']},ensure_ascii=False),flush=True)
+            print(json.dumps({'case':case,'ok':True,'receipt_path':str(out/(case+'.receipt.json')),'model':receipt.get('model'),'files':receipt['files']},ensure_ascii=False),flush=True)
 
 
 if __name__=='__main__':asyncio.run(main())

@@ -174,24 +174,32 @@ class Client:
         operation = uuid.uuid4().hex
         record_path = self.directory / (operation + '.request.json')
         record_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-        async with httpx.AsyncClient(timeout=180, headers={'Authorization': 'Bearer ' + self.key, 'User-Agent': 'NovelAI-MCP/0.2.0', 'Accept': 'text/event-stream' if endpoint.endswith('-stream') else 'application/json'}) as client:
-            if endpoint.endswith('-stream'):
-                chunks, buffer = [], b''
-                async with client.stream('POST', 'https://image.novelai.net' + endpoint, json=payload) as stream:
-                    async for chunk in stream.aiter_bytes():
-                        chunks.append(chunk); buffer += chunk
-                        while b'\n' in buffer:
-                            line, buffer = buffer.split(b'\n', 1)
-                            if progress and line.startswith(b'data:'):
-                                try:
-                                    event = json.loads(line[5:])
-                                    if isinstance(event, dict) and isinstance(event.get('step'), (int, float)):
-                                        await progress(event['step'], payload['parameters'].get('steps'))
-                                except (ValueError, KeyError):
-                                    pass
-                    response = httpx.Response(stream.status_code, headers=stream.headers, content=b''.join(chunks), request=stream.request)
-            else:
-                response = await client.post('https://image.novelai.net' + endpoint, json=payload)
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(180, connect=15), headers={'Authorization': 'Bearer ' + self.key, 'User-Agent': 'NovelAI-MCP/0.2.0', 'Accept': 'text/event-stream' if endpoint.endswith('-stream') else 'application/json'}) as client:
+                if endpoint.endswith('-stream'):
+                    chunks, buffer = [], b''
+                    async with client.stream('POST', 'https://image.novelai.net' + endpoint, json=payload) as stream:
+                        async for chunk in stream.aiter_bytes():
+                            chunks.append(chunk); buffer += chunk
+                            while b'\n' in buffer:
+                                line, buffer = buffer.split(b'\n', 1)
+                                if progress and line.startswith(b'data:'):
+                                    try:
+                                        event = json.loads(line[5:])
+                                        if isinstance(event, dict) and isinstance(event.get('step'), (int, float)):
+                                            await progress(event['step'], payload['parameters'].get('steps'))
+                                    except (ValueError, KeyError):
+                                        pass
+                        response = httpx.Response(stream.status_code, headers=stream.headers, content=b''.join(chunks), request=stream.request)
+                else:
+                    response = await client.post('https://image.novelai.net' + endpoint, json=payload)
+        except httpx.RequestError as error:
+            receipt = {'operation_id': operation, 'status': 'transport_error', 'request_path': str(record_path),
+                       'model': payload.get('model'), 'action': payload.get('action'), 'files': [],
+                       'outcome': 'not_submitted' if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)) else 'unknown',
+                       'error': {'type': type(error).__name__, 'message': str(error), 'detail': repr(error)}}
+            (self.directory / (operation + '.result.json')).write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
+            raise RuntimeError(json.dumps(receipt, ensure_ascii=False)) from error
         response_path = self.directory / (operation + '.response.bin')
         response_path.write_bytes(response.content)
         receipt = {'operation_id': operation, 'status': response.status_code, 'model': payload.get('model'), 'action': payload.get('action'), 'correlation_id': response.headers.get('x-correlation-id'), 'request_path': str(record_path), 'response_path': str(response_path), 'files': []}
