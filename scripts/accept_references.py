@@ -13,7 +13,7 @@ from mcp.client.stdio import stdio_client
 
 async def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--case',required=True,choices=['v5_full_infill','v45_full_reference','v45_curated_reference','v45_curated_infill','v5_curated_img2img'])
+    parser.add_argument('--case',required=True,choices=['v5_full_infill_polygon','v5_full_infill','v45_full_reference','v45_curated_reference','v45_curated_infill','v5_curated_img2img'])
     parser.add_argument('--strength',type=float)
     options=parser.parse_args();case=options.case
     root=Path(__file__).resolve().parents[1]
@@ -28,8 +28,12 @@ async def main():
         async with ClientSession(reader,writer) as session:
             await session.initialize()
             call={'prompt':'An adult woman age 32, black hair in a low ponytail, beige shirt, dark brown apron, dark green trousers, holding a blue book, seated at a wooden table in an outdoor seaside cafe, three-quarter view, detailed anime illustration, no text.', 'image_path':source,'width':832,'height':1216,'seed':314159,'negative_prompt':'text, watermark, lowres'}
-            if case.endswith('infill'):
-                prepared=await session.call_tool('prepare_image_v5',{'image_path':source,'width':832,'height':1216,'mask_box':[453,465,519,601]})
+            if '_infill' in case:
+                prep={'image_path':source,'width':832,'height':1216,'mask_box':[453,465,519,601]}
+                if case.endswith('polygon'):
+                    prep.pop('mask_box')
+                    prep['mask_polygons']=[[[475,477],[506,474],[493,532],[479,545],[464,533]],[[467,574],[480,570],[474,592],[467,591]]]
+                prepared=await session.call_tool('prepare_image_v5',prep)
                 if prepared.isError:raise RuntimeError(str(prepared))
                 prepared=json.loads(next(c.text for c in prepared.content if c.type=='text'))
                 call.update(reference_mode='infill',model='v5-full' if case.startswith('v5_') else 'v4.5-curated',image_path=prepared['path'],mask_path=prepared['mask_path'],strength=.8,

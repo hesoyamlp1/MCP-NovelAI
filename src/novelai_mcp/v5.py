@@ -356,13 +356,16 @@ def register(mcp, key, directory):
         return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))]
 
     @mcp.tool()
-    async def prepare_image_v5(image_path: str, width: int, height: int, mode: str = 'contain', mask_box: list[int] | None = None, crop_box: list[int] | None = None) -> dict:
-        """准备图像输入，保存新 PNG，保留原文件。crop_box=[左,上,右,下] 按原图坐标先裁切；contain 等比留边，cover 等比裁切，stretch 拉伸。mask_box 可另存白色选区/黑色背景遮罩，用于 V5 Full 或 V4.5 局部重绘。"""
+    async def prepare_image_v5(image_path: str, width: int, height: int, mode: str = 'contain', mask_box: list[int] | None = None, crop_box: list[int] | None = None, mask_polygons: list[list[list[int]]] | None = None) -> dict:
+        """准备图像输入，保存新 PNG，保留原文件。crop_box=[左,上,右,下] 按原图坐标先裁切；contain 等比留边，cover 等比裁切，stretch 拉伸。mask_box 或 mask_polygons（多个 [[x,y],...] 轮廓，按输出画布坐标）生成白色选区/黑色背景遮罩，可合并多个选区。用于局部重绘，不必把周围背景一起框进去。"""
         from PIL import ImageOps, ImageDraw
         if width < 64 or height < 64 or width % 64 or height % 64 or width * height > 16_777_216:
             raise ValueError('画布宽高需为 64 倍数，最大 16MP')
         if mask_box is not None and (len(mask_box) != 4 or not 0 <= mask_box[0] < mask_box[2] <= width or not 0 <= mask_box[1] < mask_box[3] <= height):
             raise ValueError('mask_box 超出画布')
+        if mask_polygons is not None:
+            if not 1 <= len(mask_polygons) <= 32 or any(not 3 <= len(poly) <= 128 or any(len(point) != 2 or not all(type(n) is int for n in point) or not (0 <= point[0] < width and 0 <= point[1] < height) for point in poly) for poly in mask_polygons):
+                raise ValueError('mask_polygons 需为 1–32 个多边形，每个 3–128 个画布内整像素坐标')
         with Image.open(image_path) as im:
             im = im.convert('RGBA')
             if crop_box is not None:
@@ -381,7 +384,10 @@ def register(mcp, key, directory):
         stem = uuid.uuid4().hex
         target = folder / (stem + '-prepared.png'); out.save(target)
         result = {'path': str(target), 'width': width, 'height': height, 'source': image_path, 'mode': mode, 'crop_box': crop_box}
-        if mask_box is not None:
-            mask = Image.new('L', (width, height), 0); ImageDraw.Draw(mask).rectangle(mask_box, fill=255)
+        if mask_box is not None or mask_polygons:
+            mask = Image.new('L', (width, height), 0)
+            draw = ImageDraw.Draw(mask)
+            if mask_box is not None: draw.rectangle(mask_box, fill=255)
+            for poly in mask_polygons or []: draw.polygon([tuple(point) for point in poly], fill=255)
             mask_path = folder / (stem + '-mask.png'); mask.save(mask_path); result['mask_path'] = str(mask_path)
         return result
