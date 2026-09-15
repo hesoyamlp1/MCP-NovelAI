@@ -23,7 +23,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import TextContent, ImageContent
 from PIL import Image as PILImage
 from pydantic import SecretStr
-from .v5 import register as register_v5, GUIDANCE as V5_GUIDANCE
+from .v5 import register as register_v5, GUIDANCE as V5_GUIDANCE, reference_fields
 
 from novelai_python import GenerateImageInfer, ApiCredential, ImageGenerateResp
 from novelai_python.sdk.ai.generate_image import Character, Model, Sampler, UCPreset
@@ -179,6 +179,7 @@ def build_precise_reference_params(
     image_b64: str,
     mode: str = "character&style",
     fidelity: float = 1.0,
+    strength: float = 1.0,
 ) -> dict:
     """
     构建 director_reference_* 参数字典。
@@ -186,25 +187,7 @@ def build_precise_reference_params(
     mode: "character" / "style" / "character&style"
     fidelity: 0.0~1.0，映射为 secondary_strength = 1.0 - fidelity
     """
-    if mode not in REFERENCE_MODES:
-        raise ValueError(f"无效的 reference_mode: '{mode}'，可选: {REFERENCE_MODES}")
-    fidelity = max(0.0, min(1.0, fidelity))
-
-    return {
-        "director_reference_images": [image_b64],
-        "director_reference_descriptions": [{
-            "use_coords": False,
-            "use_order": False,
-            "legacy_uc": False,
-            "caption": {
-                "base_caption": mode,
-                "char_captions": [],
-            },
-        }],
-        "director_reference_strength_values": [1.0],
-        "director_reference_secondary_strength_values": [1.0 - fidelity],
-        "director_reference_information_extracted": [1.0],
-    }
+    return reference_fields(image_b64, mode, fidelity, strength)
 
 
 def build_v4_prompt(prompt: str, negative_prompt: str, characters: list[dict] | None = None) -> tuple[dict, dict]:
@@ -313,7 +296,7 @@ async def generate_image(
     variety_boost: Annotated[bool, "多样性增强（Variety Boost），改善样本多样性"] = True,
     reference_image_paths: Annotated[
         list[str] | None,
-        "【Vibe Transfer】参考图片的文件绝对路径列表（最多 16 张）。免费（Opus），基于风格迁移保持角色大致外观。适合轻量级角色一致性。可与 Precise Reference 同时使用。"
+        "【Vibe Transfer】参考图片的文件绝对路径列表（最多 16 张）。用于风格与视觉特征引导，费用以官方返回为准。不能与 Precise Reference 同时使用。"
     ] = None,
     reference_strength: Annotated[
         float,
@@ -325,7 +308,7 @@ async def generate_image(
     ] = 1.0,
     precise_reference_image_path: Annotated[
         str | None,
-        "【Precise Reference】参考图片的文件绝对路径（单张）。消耗 Anlas。基于专用模型精确复制角色身份/画风。效果远优于 Vibe Transfer，适合需要严格角色一致性的场景。图片会自动 letterbox 到合适分辨率。"
+        "【Precise Reference】参考图片的文件绝对路径（单张）。消耗 Anlas。用于保持角色身份/画风；结果仍需目视确认，适合角色连续性。图片会自动 letterbox 到合适分辨率。"
     ] = None,
     precise_reference_mode: Annotated[
         str,
@@ -346,15 +329,19 @@ async def generate_image(
 
     支持单人和多人场景，通过 characters 参数定义角色位置。
 
-    两种角色一致性方案（可同时使用）：
-    1. Vibe Transfer（reference_image_paths）：免费，风格迁移，适合大致保持角色外观
+    两种参考方式（不可同时使用，Precise Reference 仅 V4.5）：
+    1. Vibe Transfer（reference_image_paths）：风格与特征引导，费用依官方接口
     2. Precise Reference（precise_reference_image_path）：消耗 Anlas，精确复制角色身份/画风
        - mode="character": 仅复制角色（适合换装、换背景）
        - mode="style": 仅复制画风（适合风格迁移）
        - mode="character&style": 同时复制角色和画风（推荐）
     """
     resolved_model = resolve_model(model)
-    actual_seed = seed if seed is not None else random.randint(0, 9999999999)
+    if precise_reference_image_path and reference_image_paths:
+        raise ValueError("Precise Reference 与 Vibe Transfer 不兼容，请选择一种")
+    if precise_reference_image_path and not resolved_model.value.startswith('nai-diffusion-4-5-'):
+        raise ValueError("Precise Reference 仅支持 V4.5")
+    actual_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
     # ===== 判断是否需要走 HTTP 直调路径 =====
     if precise_reference_image_path:
@@ -510,7 +497,7 @@ async def img2img(
     支持 Vibe Transfer + Precise Reference（可同时使用）。
     """
     resolved_model = resolve_model(model)
-    actual_seed = seed if seed is not None else random.randint(0, 9999999999)
+    actual_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
 
     path = Path(image_path)
     if not path.exists():

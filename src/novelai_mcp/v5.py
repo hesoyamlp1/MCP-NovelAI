@@ -14,12 +14,13 @@ from mcp.types import ImageContent, TextContent
 from mcp.server.fastmcp import Context
 
 MODELS = {'v5-full': 'nai-diffusion-5-full', 'v5-curated': 'nai-diffusion-5-curated'}
+REFERENCE_MODELS = {'v4.5-full': 'nai-diffusion-4-5-full', 'v4.5-curated': 'nai-diffusion-4-5-curated'}
 GUIDANCE = '''NovelAI 美术工具。V5 优先使用 generate_v5，旧 generate_image/img2img 保留给旧模型。
 先用 v5_capabilities 核对功能；用 suggest_tags_v5 查询模型对应的标签。标签计数不是训练数据或生成质量的保证。V5 同时支持标签和自然语言，场景构图可以用明确的自然语言描述。
 人物固定外观放在独立 character prompt，场景和风格放在 base prompt；多角色可提供各自坐标与负面提示词。先保存满意的参考图和生成参数，再选择实际支持的图像输入方式保持连续性。
 图生图需要 image_path、strength、noise；低 strength 倾向保留原图，高 strength 改动更大。明确描述要保留与要变化的内容，不能把图生图等同于精确身份复制。
 实测 0.35 可保留大部分画面但不一定改掉目标细节，0.7 能产生更明显变化但也会改变姿态和服装细节。稳定外貌与必须保留的物件需要在提示词中明确描述。
-官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。两个 V5 模型已实测不支持 infill，不要把错误响应附带的图片当作局部重绘结果；独立 upscale 已实测可用。
+官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。V5 Full 局部重绘使用 nai-diffusion-5-full-inpainting；旧测试误用了普通生成模型，不能据此判定不支持。V5 Curated 不静默回退，需要时明确选 V4.5 Curated。身份或风格参考使用 generate_reference 的 precise 模式及 V4.5。独立 upscale 已实测可用。
 prepare_image_v5 可准备画布/尺寸及遮罩。图像处理会保存新文件，原文件保留。API 限流或失败不自动重试。
 使用 seed、采样和完整参数记录复现画面；prompt 的作用与 img2img strength 相互影响。PNG 支持透明度，透明背景还需要在正面描述中明确要求。
 工具可预览最终 payload；预览不是实际生成。每次成功生成返回文件、尺寸、哈希与请求记录；用户可见结果需查看图片。'''
@@ -80,9 +81,11 @@ def sse_images(content):
 def build_payload(prompt, model='v5-full', action='generate', width=832, height=1216,
                   negative_prompt='', characters=None, image_path=None, mask_path=None,
                   strength=.5, noise=0., seed=None, parameters=None):
-    model_id = resolve_model(model)
+    model_id = REFERENCE_MODELS.get(model) or (model if model in REFERENCE_MODELS.values() else resolve_model(model))
     if action == 'infill':
-        raise ValueError('V5 Full 和 Curated 的官方接口已实测不支持 infill；没有提交生成请求')
+        if model_id == MODELS['v5-curated']:
+            raise ValueError('V5 Curated 尚无已确认的原生局部重绘；请明确选择 v5-full 或 v4.5-curated，不自动换模型')
+        model_id += '-inpainting'
     if action not in ('generate', 'img2img', 'infill'):
         raise ValueError('action 必须是 generate / img2img / infill')
     if width < 64 or height < 64 or width % 64 or height % 64:
@@ -90,8 +93,9 @@ def build_payload(prompt, model='v5-full', action='generate', width=832, height=
     if not 0 <= strength <= 1 or not 0 <= noise <= 1:
         raise ValueError('strength/noise 应在 0–1 之间')
     chars = characters or []
-    if len(chars) > 22:
-        raise ValueError('V5 最多 22 个独立角色描述')
+    limit = 22 if model_id.startswith('nai-diffusion-5-') else 6
+    if len(chars) > limit:
+        raise ValueError(f'当前模型最多 {limit} 个独立角色描述')
     positive, negative = [], []
     for char in chars:
         x, y = char.get('x', .5), char.get('y', .5)
@@ -118,11 +122,40 @@ def build_payload(prompt, model='v5-full', action='generate', width=832, height=
     params.update(parameters or {})
     if any(not isinstance(params.get(k), int) or params[k] < 64 or params[k] % 64 for k in ('width', 'height')):
         raise ValueError('最终宽高必须是至少 64 的 64 倍数')
-    if any(k.startswith('director_reference_') or k.startswith('reference_') for k in params):
+    if model_id.startswith('nai-diffusion-5-') and any(k.startswith('director_reference_') or k.startswith('reference_') for k in params):
         raise ValueError('官方当前 V5 未开放 Vibe Transfer/Precise Reference；请使用实际支持的 img2img 输入')
+    if params.get('director_reference_images') and params.get('reference_image_multiple'):
+        raise ValueError('Precise Reference 与 Vibe Transfer 不兼容，请选择一种')
+    if action in ('img2img', 'infill'):
+        expected = (params['width'], params['height'])
+        for key in ('image', 'mask') if action == 'infill' else ('image',):
+            with Image.open(io.BytesIO(base64.b64decode(params[key]))) as im:
+                if im.size != expected:
+                    raise ValueError(f'{key} 尺寸须等于生成画布 {expected}，请先 prepare_image_v5')
     if params.get('image_format') not in ('png', 'webp'):
         raise ValueError('image_format 必须是 png 或 webp')
     return {'input': prompt, 'model': model_id, 'action': action, 'parameters': params}
+
+
+def reference_fields(image_b64, mode='character&style', fidelity=1., strength=1.):
+    if mode not in ('character', 'style', 'character&style') or not 0 <= fidelity <= 1 or not 0 <= strength <= 1:
+        raise ValueError('参考类型需为 character/style/character&style，strength/fidelity 需为 0–1')
+    return {'director_reference_images': [image_b64],
+            'director_reference_descriptions': [{'use_coords': False, 'use_order': False, 'legacy_uc': False, 'caption': {'base_caption': mode, 'char_captions': []}}],
+            'director_reference_strength_values': [strength],
+            'director_reference_secondary_strength_values': [1. - fidelity],
+            'director_reference_information_extracted': [1.]}
+
+
+def precise_image(path):
+    from PIL import ImageOps
+    with Image.open(path) as source:
+        size = min(((1024, 1536), (1472, 1472), (1536, 1024)), key=lambda s: abs(s[0]/s[1]-source.width/source.height))
+        fitted = ImageOps.contain(source.convert('RGB'), size)
+        canvas = Image.new('RGB', size, 'black')
+        canvas.paste(fitted, ((size[0]-fitted.width)//2, (size[1]-fitted.height)//2))
+        out = io.BytesIO(); canvas.save(out, 'PNG')
+    return base64.b64encode(out.getvalue()).decode()
 
 
 class Client:
@@ -161,7 +194,7 @@ class Client:
                 response = await client.post('https://image.novelai.net' + endpoint, json=payload)
         response_path = self.directory / (operation + '.response.bin')
         response_path.write_bytes(response.content)
-        receipt = {'operation_id': operation, 'status': response.status_code, 'correlation_id': response.headers.get('x-correlation-id'), 'request_path': str(record_path), 'response_path': str(response_path), 'files': []}
+        receipt = {'operation_id': operation, 'status': response.status_code, 'model': payload.get('model'), 'action': payload.get('action'), 'correlation_id': response.headers.get('x-correlation-id'), 'request_path': str(record_path), 'response_path': str(response_path), 'files': []}
         if not response.is_success:
             try:
                 error, _ = json.JSONDecoder().raw_decode(response.text)
@@ -224,7 +257,7 @@ def register(mcp, key, directory):
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
         return {'models': MODELS, 'independent_director_tools': {'tool': 'director_image', 'verified_on_v5_source_images': ['lineart', 'bg-removal', 'sketch', 'colorize', 'emotion', 'declutter', 'declutter-keep-bubbles'], 'effect_limits': '生成式处理可能同时改变文字、颜色、衣服和背景；必须保留原图并检查结果，非精确局部编辑。'}, 'documented': ['text_to_image', 'image_to_image', '22_character_prompts', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
-                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale', 'sse_streaming', 'multi_character', 'transparent_background', 'png', 'webp', 'text_rendering'], 'verified_unsupported': ['infill'],
+                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale', 'sse_streaming', 'multi_character', 'transparent_background', 'png', 'webp', 'text_rendering'], 'verified_unsupported': [], 'inpainting': {'v5-full': {'model': 'nai-diffusion-5-full-inpainting', 'documented': True, 'verification': 'pending_retest'}, 'v5-curated': {'native': False, 'explicit_alternative': 'v4.5-curated'}}, 'reference_models': REFERENCE_MODELS, 'reference_tool': 'generate_reference',
                 'prompt_limits_approx_tokens': {'v5-full': {'base': 1471, 'text': 750}, 'v5-curated': {'base': 703, 'text': 374}},
                 'references': ['https://novelai.net/v5', 'https://docs.novelai.net/en/image/models/', 'https://image.novelai.net/docs/doc.json'], 'guide': GUIDANCE}
 
@@ -235,7 +268,7 @@ def register(mcp, key, directory):
             response = await http.get('https://image.novelai.net/docs/doc.json')
             response.raise_for_status()
         definitions = response.json()['definitions']
-        return {'source': 'https://image.novelai.net/docs/doc.json', 'schemas': {k: v for k, v in definitions.items() if k.startswith('image.')}, 'note': '这些是图像服务共享 schema；V5 目前不支持 infill、Vibe Transfer 和 Precise Reference。'}
+        return {'source': 'https://image.novelai.net/docs/doc.json', 'schemas': {k: v for k, v in definitions.items() if k.startswith('image.')}, 'note': '这些是图像服务共享 schema；V5 Full 的 infill 需独立 inpainting 模型；V5 不支持 Precise Reference/Vibe Transfer，V4.5 参考用 generate_reference。'}
 
     @mcp.tool()
     async def suggest_tags_v5(query: str, model: str = 'v5-full', language: str = 'en') -> dict:
@@ -249,10 +282,40 @@ def register(mcp, key, directory):
         return {'subscription': await c.get('/user/subscription'), 'priority': await c.get('/user/priority')}
 
     @mcp.tool()
+    async def generate_reference(prompt: str, image_path: str, model: str = 'v4.5-full', reference_mode: str = 'precise',
+                                 width: int = 832, height: int = 1216, reference_type: str = 'character',
+                                 strength: float = .7, fidelity: float = .8, noise: float = 0.,
+                                 mask_path: str | None = None, identity_reference_path: str | None = None,
+                                 negative_prompt: str = '', characters: list[dict] | None = None,
+                                 seed: int | None = None, parameters: dict | None = None, preview_only: bool = False) -> list:
+        """带图生成，返回实际模型与原始请求/图片。precise 保持身份/风格并重新构图（仅 V4.5）；img2img 基于底图重绘（V5/V4.5）；infill 遮罩局部重绘（V5 Full/V4.5）。infill 可另给 identity_reference_path（仅 V4.5）。不静默换模型。"""
+        if reference_mode not in ('precise', 'img2img', 'infill'):
+            raise ValueError('reference_mode 需为 precise / img2img / infill')
+        is_precise = reference_mode == 'precise' or bool(identity_reference_path)
+        if is_precise and model not in (*REFERENCE_MODELS, *REFERENCE_MODELS.values()):
+            raise ValueError('Precise Reference 只支持 V4.5，请明确选择 v4.5-full 或 v4.5-curated')
+        if identity_reference_path and reference_mode != 'infill':
+            raise ValueError('额外身份参考用于 infill；precise 直接使用 image_path')
+        params = dict(parameters or {})
+        if is_precise:
+            if any(k.startswith(('reference_', 'director_reference_')) for k in params):
+                raise ValueError('请使用专用参考参数，避免混合或覆盖参考方式')
+            params.update(reference_fields(precise_image(identity_reference_path or image_path), reference_type, fidelity, strength))
+        payload = build_payload(prompt, model, 'generate' if reference_mode == 'precise' else reference_mode,
+                                width, height, negative_prompt, characters, None if reference_mode == 'precise' else image_path,
+                                mask_path, strength, noise, seed, params)
+        if preview_only:
+            return [TextContent(type='text', text=json.dumps({'preview_only': True, 'payload': payload}, ensure_ascii=False))]
+        receipt = await client().generate(payload)
+        receipt.update(model=payload['model'], reference_mode=reference_mode, reference_path=image_path)
+        return [TextContent(type='text', text=json.dumps(receipt, ensure_ascii=False))] + [ImageContent(type='image', data=read_image(f['path']), mimeType='image/' + Path(f['path']).suffix[1:]) for f in receipt['files']]
+
+    @mcp.tool()
     async def generate_v5(prompt: str, model: str = 'v5-full', action: str = 'generate', width: int = 832, height: int = 1216,
                           negative_prompt: str = '', characters: list[dict] | None = None, image_path: str | None = None, mask_path: str | None = None,
                           strength: float = .5, noise: float = 0., seed: int | None = None, parameters: dict | None = None, preview_only: bool = False, stream: bool = False, ctx: Context = None) -> list:
-        """V5 文生图/图生图请求。characters 每项含 prompt、negative_prompt、x、y；parameters 对应官方 RequestParameters，可设置采样/步数/引导/格式/透明背景等参数。infill 已实测不支持，会在提交前拒绝。不会自动重试失败请求。"""
+        """V5 文生图/图生图，Full 支持 infill 并使用独立 inpainting 模型；Curated 不自动回退。characters 每项含 prompt、negative_prompt、x、y；parameters 为官方采样/步数/引导等设置。不会自动重试失败请求。"""
+        resolve_model(model)
         payload = build_payload(prompt, model, action, width, height, negative_prompt, characters, image_path, mask_path, strength, noise, seed, parameters)
         if stream:
             payload['parameters']['stream'] = 'sse'
@@ -282,7 +345,7 @@ def register(mcp, key, directory):
 
     @mcp.tool()
     async def prepare_image_v5(image_path: str, width: int, height: int, mode: str = 'contain', mask_box: list[int] | None = None, crop_box: list[int] | None = None) -> dict:
-        """准备图像输入，保存新 PNG，保留原文件。crop_box=[左,上,右,下] 按原图坐标先裁切；contain 等比留边，cover 等比裁切，stretch 拉伸。mask_box 可另存白色选区/黑色背景遮罩，但 V5 当前不支持 infill。"""
+        """准备图像输入，保存新 PNG，保留原文件。crop_box=[左,上,右,下] 按原图坐标先裁切；contain 等比留边，cover 等比裁切，stretch 拉伸。mask_box 可另存白色选区/黑色背景遮罩，用于 V5 Full 或 V4.5 局部重绘。"""
         from PIL import ImageOps, ImageDraw
         if width < 64 or height < 64 or width % 64 or height % 64 or width * height > 16_777_216:
             raise ValueError('画布宽高需为 64 倍数，最大 16MP')
