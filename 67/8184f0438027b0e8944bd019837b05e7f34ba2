@@ -1,0 +1,21 @@
+src/novelai_mcp/server.py
+  s_4c3c29970abeab::t_a6293fc5d5811a 26,182,190,299,311,332-333,340-344,500
+src/novelai_mcp/v5.py
+  s_4c3c29970abeab::t_6e2e9656a3fc24 17,23,84,86-88,96-98,125,127-134,140-160,197,260,271,284-312,317-318,348
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "678184f0438027b0e8944bd019837b05e7f34ba2",
+  "prompts": {},
+  "sessions": {
+    "s_4c3c29970abeab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a099ba-fdd2-7023-9424-d7d8f07c7dd6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LinSuki <admin@toddout.work>"
+    }
+  }
+}
