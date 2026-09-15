@@ -282,8 +282,9 @@ def register(mcp, key, directory):
 
     @mcp.tool()
     async def suggest_tags_v5(query: str, model: str = 'v5-full', language: str = 'en') -> dict:
-        """使用 NovelAI 自身的模型标签建议，保留原始 count/confidence，不把它当成生成质量评分。"""
-        return await client().get('/ai/generate-image/suggest-tags', {'model': resolve_model(model), 'prompt': query, 'lang': language})
+        """使用 NovelAI 自身的模型标签建议，兼容 V5 与 V4.5；保留原始 count/confidence，不把它当成生成质量评分。"""
+        model_id = REFERENCE_MODELS.get(model) or (model if model in REFERENCE_MODELS.values() else resolve_model(model))
+        return await client().get('/ai/generate-image/suggest-tags', {'model': model_id, 'prompt': query, 'lang': language})
 
     @mcp.tool()
     async def account_v5() -> dict:
