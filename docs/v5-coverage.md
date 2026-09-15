@@ -15,9 +15,10 @@
 | SSE | 通过 | 通过 | stream，接收最终图片，场景图可见；中间预览不会被当成最终成功 |
 | 模型标签建议 | 通过 | 通过 | 官方 suggest-tags 接口，原样保留 count/confidence |
 
-## 明确不可用的边界
+## 能力边界（2026-09-15 修正）
 
-- infill：两个 V5 模型均实际返回 HTTP 400，提示模型不支持 infill。响应后还附带图片内容，但这不证明局部重绘成立。工具已在提交前拒绝此动作；保留最初原始错误响应作为证据。
+- 原 infill 验收使用普通生成模型，HTTP 400 不能据此判定整个 V5 不支持局部重绘。现已修正为 `nai-diffusion-5-full-inpainting` 并完成真实 MCP 调用：书的选区变红，矩形边缘仍有色块，不能称为无缝局部编辑。旧失败原文保留。
+- 官方客户端把 V5 Curated 的 infill 转到 `nai-diffusion-4-5-curated-inpainting`。本工具要求明确选择 `v4.5-curated`，该路线已通过 API 验证；首张矩形选区画面未达到预期改色效果，不能用成功状态替代视觉验收。
 - Vibe Transfer、Precise Reference：当前官方 V5 页面声明尚未开放，V5 工具拒绝相关字段。不用 V4.5 实现冒充 V5。
 - Director Tools 属于独立图像工具，现已提供 director_image。线稿与去背景已对两个 V5 模型来源图完成真实 MCP 调用；其余操作已完成真实返回测试；效果限制见下，不计入 V5 原生能力。
 
@@ -67,3 +68,15 @@ Mac 测试目录：`/Users/linsuki/passion/MCP-NovelAI/.runtime/v5-e2e/`。
 - 使用各 V5 模型生成的正面中性人物、浮动文字与对白气泡作为输入。emotion_closeup、declutter_text、declutter-keep-bubbles_text 共六次真实 MCP 调用完成，原图和结果均已目视检查。
 - 图集：https://show.toddout.work/a/mu0a4pf1f4c9 。
 - 所有 Director 操作现在都有真实返回及针对其用途的可见效果记录；依然是独立工具，不宣称 V5 原生精确编辑或只改目标区域。
+
+
+## 参考接入修复（2026-09-15）
+
+- 新工具 `generate_reference` 明确区分 precise、img2img、infill，记录实际 model/action 与完整请求。
+- V4.5 Full、Curated 的 precise 人物参考均已通过真实 MCP 换场景测试：同一成年人物的黑马尾、米色上衣、棕围裙和绿裤子延续到海边坐姿；Full 的比例被明显夸张，Curated 也不是完全同脸。参考不是身份锁定。
+- V5 Curated 的 img2img 返回有效图，但在 strength=0.5 下仍留在原书店，未按提示切换海边坐姿；适合保留底图，不代替人物参考。
+- `prepare_image_v5` 新增多个多边形遮罩。其绘制输入经过校验；本轮轮廓遮罩生图遇到未提交的 ConnectError，尚无该输入的视觉结论。
+- 精确参考和 Vibe Transfer 不兼容；旧工具中的混用提示及“免费”结论已修正。强度与保真度单独传递，V4.5 局部重绘可另附身份参考，该组合尚未单独出图验收。
+- 连接错误保留类型、请求和 outcome；ConnectError/ConnectTimeout 标为 not_submitted，其他请求阶段错误标 unknown。绝不自动重试。
+- 验收脚本 `scripts/accept_references.py`，Mac 原始证据 `.runtime/reference-repair/`；每次运行独立目录，保留失败记录。
+- 官方网页源码确认 Full/Curated 的实际路由，以及 V5 UI 的 32 角色输入上限（不是保证画面能清晰呈现 32 人）。

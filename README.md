@@ -7,7 +7,7 @@ MCP 服务器，为美术 Agent 提供 NovelAI 图像生成能力。V5 使用官
 
 ## V5 扩展（当前源码）
 
-支持 `v5-full` 与 `v5-curated`。新增 `generate_v5`（文生图、图生图、SSE）、`upscale_v5`、`suggest_tags_v5`、`prepare_image_v5`、`inspect_image_v5`、`account_v5`、`v5_capabilities`、`v5_parameter_schema`。
+支持 `v5-full` 与 `v5-curated`。新增 `generate_reference`（V4.5 人物/风格参考、V5/V4.5 图生图、Full/V4.5 局部重绘）、`generate_v5`（文生图、图生图、Full 局部重绘、SSE）、`upscale_v5`、`suggest_tags_v5`、`prepare_image_v5`、`inspect_image_v5`、`account_v5`、`v5_capabilities`、`v5_parameter_schema`。
 调用前读取能力说明；完整参数、图像输入、各角色正负描述与坐标均可配置。两个模型的局部重绘 infill 已实测不支持；当前 V5 也未开放 Vibe Transfer / Precise Reference。
 详见 [覆盖与真实验收](docs/v5-coverage.md)。本轮 V5 代码尚未发布到 PyPI，以下 uvx 安装仍可能得到旧版本；新功能请从本仓库源码运行。
 

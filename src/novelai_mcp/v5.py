@@ -20,7 +20,7 @@ GUIDANCE = '''NovelAI 美术工具。V5 优先使用 generate_v5，旧 generate_
 人物固定外观放在独立 character prompt，场景和风格放在 base prompt；多角色可提供各自坐标与负面提示词。先保存满意的参考图和生成参数，再选择实际支持的图像输入方式保持连续性。
 图生图需要 image_path、strength、noise；低 strength 倾向保留原图，高 strength 改动更大。明确描述要保留与要变化的内容，不能把图生图等同于精确身份复制。
 实测 0.35 可保留大部分画面但不一定改掉目标细节，0.7 能产生更明显变化但也会改变姿态和服装细节。稳定外貌与必须保留的物件需要在提示词中明确描述。
-官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。V5 Full 局部重绘使用 nai-diffusion-5-full-inpainting；旧测试误用了普通生成模型，不能据此判定不支持。V5 Curated 不静默回退，需要时明确选 V4.5 Curated。身份或风格参考使用 generate_reference 的 precise 模式及 V4.5。独立 upscale 已实测可用。
+官方当前 V5 尚未开放 Vibe Transfer/Precise Reference，不能混用 V4.5 的字段假装支持。V5 Full 局部重绘使用 nai-diffusion-5-full-inpainting；旧测试误用了普通生成模型，不能据此判定不支持。V5 Curated 官方网页的局部重绘实际回退 V4.5 Curated；本工具不静默回退，需要时明确选 V4.5 Curated。身份或风格参考使用 generate_reference 的 precise 模式及 V4.5。独立 upscale 已实测可用。2026-09-15 已通过 V5 Full infill API 与选区变化验证，但矩形选区结果有边缘色块，需要检查并优化遮罩；不要承诺无缝结果。V4.5 Full/Curated 的人物参考均已换场景实测，发型和服装可延续，但身材比例与画风仍可能改变。
 prepare_image_v5 可准备画布/尺寸及遮罩。图像处理会保存新文件，原文件保留。API 限流或失败不自动重试。
 使用 seed、采样和完整参数记录复现画面；prompt 的作用与 img2img strength 相互影响。PNG 支持透明度，透明背景还需要在正面描述中明确要求。
 工具可预览最终 payload；预览不是实际生成。每次成功生成返回文件、尺寸、哈希与请求记录；用户可见结果需查看图片。'''
@@ -267,7 +267,7 @@ def register(mcp, key, directory):
     async def v5_capabilities() -> dict:
         """V5 模型及能力边界，使用前先读取。verified 状态另见本项目验收记录。"""
         return {'models': MODELS, 'independent_director_tools': {'tool': 'director_image', 'verified_on_v5_source_images': ['lineart', 'bg-removal', 'sketch', 'colorize', 'emotion', 'declutter', 'declutter-keep-bubbles'], 'effect_limits': '生成式处理可能同时改变文字、颜色、衣服和背景；必须保留原图并检查结果，非精确局部编辑。'}, 'documented': ['text_to_image', 'image_to_image', 'character_prompts_ui_limit_32', 'free_character_coordinates', 'natural_language_and_tags', 'text_rendering', 'transparent_background'],
-                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale', 'sse_streaming', 'multi_character', 'transparent_background', 'png', 'webp', 'text_rendering'], 'verified_unsupported': [], 'inpainting': {'v5-full': {'model': 'nai-diffusion-5-full-inpainting', 'documented': True, 'verification': 'pending_retest'}, 'v5-curated': {'native': False, 'explicit_alternative': 'v4.5-curated'}}, 'reference_models': REFERENCE_MODELS, 'reference_tool': 'generate_reference',
+                'not_available_per_current_official_docs': ['vibe_transfer', 'precise_reference'], 'verified_supported': ['text_to_image', 'image_to_image', 'upscale', 'sse_streaming', 'multi_character', 'transparent_background', 'png', 'webp', 'text_rendering'], 'verified_unsupported': [], 'inpainting': {'v5-full': {'model': 'nai-diffusion-5-full-inpainting', 'documented': True, 'verification': 'api_and_mask_effect_verified_2026-09-15', 'visual_limit': '矩形选区测试存在边缘色块，非无缝编辑保证'}, 'v5-curated': {'native': False, 'explicit_alternative': 'v4.5-curated'}}, 'reference_models': REFERENCE_MODELS, 'reference_tool': 'generate_reference', 'reference_verification': {'v4.5-full': 'precise_character_verified', 'v4.5-curated': 'precise_character_verified_and_infill_api_verified'}, 'official_client_source': 'https://novelai.net/_next/static/chunks/pages/_app-e14292a0bc1fd2c7.js',
                 'prompt_limits_approx_tokens': {'v5-full': {'base': 1471, 'text': 750}, 'v5-curated': {'base': 703, 'text': 374}},
                 'references': ['https://novelai.net/v5', 'https://docs.novelai.net/en/image/models/', 'https://image.novelai.net/docs/doc.json'], 'guide': GUIDANCE}
 

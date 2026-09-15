@@ -5,6 +5,10 @@ from pathlib import Path
 from PIL import Image
 import base64
 import io
+import json
+import httpx
+from unittest.mock import patch, AsyncMock
+from novelai_mcp.v5 import Client
 
 
 class V5Tests(unittest.TestCase):
@@ -55,6 +59,21 @@ class V5Tests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sse_images(b'event: intermediate\ndata: {"image":"iVBORw0KGgo="}\n\nevent: error\ndata: {"message":"failed"}\n')
         self.assertEqual(sse_images(b'event: intermediate\ndata: {"image":"iVBORw0KGgo="}\n'), [])
+
+
+class TransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_error_has_receipt_and_does_not_retry(self):
+        with tempfile.TemporaryDirectory() as d, patch('novelai_mcp.v5.httpx.AsyncClient') as http:
+            session=http.return_value.__aenter__.return_value
+            session.post=AsyncMock(side_effect=httpx.ConnectError(''))
+            with self.assertRaises(RuntimeError) as caught:
+                await Client('test-key',d).generate({'model':'nai-diffusion-5-full','action':'generate','parameters':{}})
+            receipt=json.loads(str(caught.exception))
+            self.assertEqual(receipt['outcome'],'not_submitted')
+            self.assertEqual(receipt['error']['type'],'ConnectError')
+            self.assertTrue(Path(receipt['request_path']).exists())
+            self.assertEqual(len(list(Path(d).glob('*.result.json'))),1)
+            session.post.assert_awaited_once()
 
 
 if __name__ == '__main__':
